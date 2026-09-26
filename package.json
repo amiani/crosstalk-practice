@@ -1,0 +1,42 @@
+{
+  "name": "crosstalk-practice",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Listening practice generated from recorded crosstalk sessions",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "node --env-file-if-exists=.env --watch src/main.ts",
+    "dev:web": "vite",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "./script/lint",
+    "postinstall": "./script/postinstall",
+    "start": "node --env-file-if-exists=.env src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/ai-openrouter": "4.0.0-rc.117",
+    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/sql-pg": "4.0.0-rc.117",
+    "effect": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@effect/language-service": "0.87.2",
+    "@effect/tsgo": "0.37.0",
+    "@effect/vitest": "4.0.0-rc.117",
+    "@oxlint/plugins": "^1.82.0",
+    "@types/node": "24.13.3",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "sql-formatter": "^15.8.2",
+    "typescript": "7.0.2",
+    "vite": "^7",
+    "vitest": "^5"
+  }
+}

@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+
+# Patches TypeScript and Oxlint so the Effect language service can supply
+# type-aware diagnostics. The patch is a development-only concern: it needs
+# @effect/tsgo, which is a devDependency.
+#
+# Production installs (`yarn workspaces focus --production`, as run by the
+# Dockerfile) drop devDependencies and then still execute this workspace's
+# postinstall, so the binary is gone by the time we are called. Exit quietly in
+# that case rather than failing the install with a command-not-found.
+
+[ "${TRACE:-}" != "" ] && set -x
+set -eu
+
+ROOT_DIR="$(
+  cd "$(dirname "$0")/.." > /dev/null
+  pwd
+)"
+
+cd "$ROOT_DIR"
+
+if [ ! -x node_modules/.bin/effect-tsgo ]; then
+  echo "postinstall: @effect/tsgo is not installed; skipping the patch step" >&2
+  exit 0
+fi
+
+exec node_modules/.bin/effect-tsgo patch --oxlint --typescript-package typescript

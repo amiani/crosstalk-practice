@@ -1,0 +1,6 @@
+{
+  "printWidth": 80,
+  "sortImports": true,
+  "sortPackageJson": false,
+  "ignorePatterns": [".yarn", "coverage", "deploy/k8s", "dist", "node_modules"]
+}

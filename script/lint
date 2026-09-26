@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+
+[ "${TRACE:-}" != "" ] && set -x
+set -eu
+
+ROOT_DIR="$(
+  cd "$(dirname "$0")/.." > /dev/null
+  pwd
+)"
+
+cd "$ROOT_DIR"
+
+pnpm exec effect-tsgo patch --oxlint
+pnpm typecheck
+
+if [ -n "${CI:-}" ]; then
+  pnpm format:check
+  pnpm exec oxlint --deny-warnings --report-unused-disable-directives .
+else
+  pnpm format
+  pnpm exec oxlint --fix --deny-warnings --report-unused-disable-directives .
+fi
