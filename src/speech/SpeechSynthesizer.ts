@@ -4,6 +4,8 @@ import type { Effect } from "effect";
 export interface SynthesizedSpeech {
   readonly bytes: Uint8Array;
   readonly mimeType: string;
+  /** Which model and voice produced the audio, when the provider says. */
+  readonly source?: string;
 }
 
 export class SpeechSynthesisError extends Schema.TaggedError<SpeechSynthesisError>()(

@@ -1,21 +1,28 @@
 /* eslint-disable effecttsgo/async-function, effecttsgo/extends-native-error, effecttsgo/global-fetch, effecttsgo/new-promise -- The browser client is deliberately plain DOM and promise code; Effect is used only for the shared API schema and generated client. */
-import { Effect, ManagedRuntime, Predicate, Schema } from "effect";
+import { Effect, ManagedRuntime, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 
-import { Api, presentationEventsPath } from "../src/api/Api.ts";
 import {
+  Api,
+  curriculumResponsePath,
+  presentationEventsPath,
+} from "../src/api/Api.ts";
+import {
+  PracticeResponse,
   PRESENTATION_EVENT_SCHEMA_VERSION,
   PresentationEventBatch,
 } from "../src/domain/model.ts";
 import type {
   PracticeItem,
   PracticeMode,
-  PracticeResponse,
+  PracticeTrack,
   SentenceId,
   SessionView,
 } from "../src/domain/model.ts";
 import type { SendEvents } from "./presentationLog.ts";
+import { deliveryOutcome } from "./responseOutbox.ts";
+import type { SendResponse } from "./responseOutbox.ts";
 
 /** Browser-side access to the JSON API through the generated Effect client. */
 
@@ -42,16 +49,30 @@ export const currentSession = async (): Promise<SessionView> =>
 export const retrySession = async (): Promise<SessionView> =>
   call((c) => c.session.retry({}));
 
+/** Deletes everything: the session and all curriculum progress. */
 export const resetSession = async (): Promise<void> =>
   call((c) => c.session.reset({})).then(() => undefined);
+
+/** Deletes the session to make way for a new recording; keeps curriculum progress. */
+export const replaceRecording = async (): Promise<void> =>
+  call((c) => c.session.replaceRecording({})).then(() => undefined);
 
 /** Selects the mode of sentences after the current one. */
 export const setMode = async (mode: PracticeMode): Promise<SessionView> =>
   call((c) => c.session.setMode({ payload: { mode } }));
 
+/** Selects the track of sentences after the current one. */
+export const setTrack = async (track: PracticeTrack): Promise<SessionView> =>
+  call((c) => c.session.setTrack({ payload: { track } }));
+
 export const upcoming = async (): Promise<ReadonlyArray<PracticeItem>> =>
   call((c) => c.practice.upcoming({}));
 
+export const curriculumUpcoming = async (): Promise<
+  ReadonlyArray<PracticeItem>
+> => call((c) => c.curriculum.upcoming({}));
+
+/** Records a crosstalk answer; curriculum answers go through the outbox. */
 export const respond = async (
   sentenceId: SentenceId,
   payload: PracticeResponse,
@@ -61,6 +82,30 @@ export const respond = async (
   );
 
 const encodeBatch = Schema.encodeSync(PresentationEventBatch);
+const encodeResponse = Schema.encodeSync(PracticeResponse);
+
+/**
+ * Posts a curriculum answer with a plain `fetch`, like presentation events,
+ * so it can use `keepalive` and be classified by status for retrying.
+ */
+export const sendCurriculumResponse: SendResponse = async (
+  sentenceId,
+  response,
+  { keepalive },
+) => {
+  try {
+    return await deliveryOutcome(
+      await fetch(curriculumResponsePath(sentenceId), {
+        body: JSON.stringify(encodeResponse(response)),
+        headers: { "content-type": "application/json" },
+        keepalive,
+        method: "POST",
+      }),
+    );
+  } catch {
+    return "retry";
+  }
+};
 
 /**
  * Posts presentation events with a plain `fetch` rather than the generated
@@ -73,37 +118,23 @@ export const sendPresentationEvents: SendEvents = async (
   events,
   { keepalive },
 ) => {
-  let response: Response;
   try {
-    response = await fetch(presentationEventsPath(sentenceId, presentationId), {
-      body: JSON.stringify(
-        encodeBatch({
-          events,
-          schemaVersion: PRESENTATION_EVENT_SCHEMA_VERSION,
-        }),
-      ),
-      headers: { "content-type": "application/json" },
-      keepalive,
-      method: "POST",
-    });
+    return await deliveryOutcome(
+      await fetch(presentationEventsPath(sentenceId, presentationId), {
+        body: JSON.stringify(
+          encodeBatch({
+            events,
+            schemaVersion: PRESENTATION_EVENT_SCHEMA_VERSION,
+          }),
+        ),
+        headers: { "content-type": "application/json" },
+        keepalive,
+        method: "POST",
+      }),
+    );
   } catch {
     return "retry";
   }
-  if (response.ok) {
-    return "accepted";
-  }
-  if (response.status === 404) {
-    // A deleted sentence is final; any other 404 is most likely a server
-    // that predates this endpoint, so keep the events until it is updated.
-    const body: unknown = await response.json().catch(() => undefined);
-    const gone = Predicate.isObject(body) && body._tag === "SentenceNotFound";
-    return gone ? "rejected" : "retry";
-  }
-  const transient =
-    response.status === 408 ||
-    response.status === 429 ||
-    response.status >= 500;
-  return transient ? "retry" : "rejected";
 };
 
 /**
@@ -125,11 +156,13 @@ export class UploadError extends Error {
  */
 export const uploadRecording = async (
   file: File,
+  track: PracticeTrack,
   mode: PracticeMode,
   onProgress: (fraction: number) => void,
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const form = new FormData();
+    form.append("track", track);
     form.append("mode", mode);
     form.append("recording", file, file.name);
     const xhr = new XMLHttpRequest();

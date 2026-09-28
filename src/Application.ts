@@ -12,6 +12,9 @@ import { Config, Effect, Layer } from "effect";
 import { HttpRouter, HttpStaticServer } from "effect/unstable/http";
 
 import { ffmpegRecordingConverter } from "./audio/RecordingConverter.ts";
+import { Curriculum } from "./curriculum/Curriculum.ts";
+import { curriculumStorePostgres } from "./curriculum/CurriculumStorePostgres.ts";
+import { llmCurriculumAuthorLayer } from "./curriculum/LlmCurriculumAuthor.ts";
 import { databaseLive } from "./db/Database.ts";
 import { apiRoutes } from "./http/routes.ts";
 import { OpenRouterAudio } from "./openrouter/OpenRouterAudio.ts";
@@ -92,19 +95,26 @@ const speechLive = Layer.mergeAll(
   Layer.provide([httpClient, NodeServices.layer]),
 );
 
-/** Sentence writing through any Effect AI language model. */
-const authorLive = llmSentenceAuthorLayer.pipe(
-  Layer.provide(
-    Layer.unwrap(
-      Config.String("OPENROUTER_MODEL").pipe(
-        Config.withDefault("google/gemini-3.8-flash"),
-        Config.map(openRouterModel),
-      ),
-    ),
+const languageModelLive = Layer.unwrap(
+  Config.String("OPENROUTER_MODEL").pipe(
+    Config.withDefault("google/gemini-3.8-flash"),
+    Config.map(openRouterModel),
   ),
 );
 
+/** Sentence writing (both tracks) through any Effect AI language model. */
+const authorLive = Layer.mergeAll(
+  llmSentenceAuthorLayer,
+  llmCurriculumAuthorLayer,
+).pipe(Layer.provide(languageModelLive));
+
+const curriculumLive = Curriculum.layer.pipe(
+  Layer.provideMerge(curriculumStorePostgres),
+  Layer.provide([speechLive, authorLive]),
+);
+
 const workerLive = PracticeWorker.layer.pipe(
+  Layer.provideMerge(curriculumLive),
   Layer.provide([speechLive, authorLive]),
 );
 

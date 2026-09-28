@@ -9,11 +9,19 @@ often as you like, reveal the English if you need it, then mark
 steer upcoming generation toward simpler variations; answered sentences are
 never deliberately replayed.
 
+Two practice tracks share that listening screen. **Conversation** (crosstalk
+practice) writes sentences from the recording's language, as above.
+**Building blocks** (curriculum practice) teaches the grammar and function
+words that connect those content words, one small concept at a time, using the
+recording's vocabulary: see
+[docs/curriculum-listening-plan.md](docs/curriculum-listening-plan.md).
+
 The domain language is in [CONTEXT.md](CONTEXT.md) and the key decisions, with
 their reasons, are in [docs/adr/](docs/adr/).
 
-Local, single-user prototype. One recording at a time; "Start over" deletes
-it and everything generated from it.
+Local, single-user prototype. One recording at a time. "New recording (keep
+progress)" deletes the recording and everything generated from it but keeps
+Building blocks progress; "Start over" deletes everything.
 
 ## Run
 
@@ -103,8 +111,47 @@ The PostgreSQL suite is skipped without `CROSSTALK_TEST_DATABASE_URL` and
    They are stored in `practice_presentations` and
    `practice_presentation_events` and do not influence generation.
 
+5. **Curriculum practice** (track `curriculum`, chosen at upload or with
+   `PUT /api/session/track`): once the session is ready the worker keeps
+   `CURRICULUM_BUFFER_SIZE` (10) sentences ahead with up to
+   `CURRICULUM_CONCURRENCY` (4) writing jobs. Every wake-up (an answer, a
+   track switch, the 30 s safety net) and every finished job starts one job
+   per missing sentence, counting jobs already under way, without waiting for
+   them. For each, the pure policy in
+   `src/curriculum/CurriculumPolicy.ts` estimates every learning target from
+   curriculum evidence and picks a target and role (teaching, transfer or
+   review) from an active set of up to four. Targets follow the older Suomen
+   mestari 1 progression without chapter boundaries: later eligible targets
+   fill free slots in order, and unassessed background grammar unlocks as
+   its targets are established. A target that meets every promotion gate but
+   the transfer checks gets a transfer sentence next. The
+   plan is stored, `CurriculumAuthor`
+   writes and independently reviews the sentence from the catalog
+   (`src/curriculum/catalog/pilot.ts`, 28 targets from the older Suomen
+   mestari 1 progression, currently unreviewed) and the profile's
+   vocabulary, and TTS voices it. `GET /api/curriculum/upcoming` serves at most
+   four; after running dry the page waits until three are ready (at most 45 s)
+   so one wait buys several sentences.
+   `POST /api/curriculum/sentences/:id/response` accepts identical
+   resends. Each response creates one evidence row, refined as presentation
+   events arrive. `DELETE /api/session/recording` replaces the recording but
+   keeps evidence; `DELETE /api/session` deletes everything.
+
+   Target status (learning, established, …) is not stored: it is recomputed
+   from `curriculum_evidence` on every decision. Each plan snapshots the
+   target's estimate at planning time, so the latest status per target is
+   roughly:
+
+   ```sql
+   SELECT DISTINCT ON (target_id) target_id,
+     decision->'estimate'->>'status' AS status, created_at AS as_of
+   FROM curriculum_plans WHERE decision->'estimate' IS NOT NULL
+   ORDER BY target_id, seq DESC;
+   ```
+
 Persisted until reset: the session, its transcript and profile, every
-generated sentence with its audio, every response, and the presentation log.
+generated sentence with its audio, every response, curriculum plans, and the
+presentation log. Curriculum evidence persists until "Start over".
 
 ### Code map
 
@@ -124,6 +171,8 @@ generated sentence with its audio, every response, and the presentation log.
 | `src/Application.ts`                                     | Layer wiring; swap providers here                                                  |
 | `web/`                                                   | Vanilla TS mobile page                                                             |
 | `web/presentationLog.ts`                                 | Presentation events: numbering, timing, durable outbox and retrying delivery       |
+| `src/curriculum/`                                        | Curriculum catalog, learner model and scheduler, author, store, orchestration      |
+| `web/responseOutbox.ts`                                  | Durable, retrying delivery of curriculum responses                                 |
 
 To change speech vendors, provide different `Transcriber` /
 `SpeechSynthesizer` layers in `src/Application.ts`. To change the LLM, set

@@ -196,6 +196,10 @@ progress {
   gap: 0.5rem;
 }
 
+.mode[hidden] {
+  display: none;
+}
+
 .mode legend {
   padding: 0;
   margin-bottom: 0.4rem;
@@ -257,6 +261,31 @@ progress {
 
 .mode-status.error {
   color: var(--no);
+}
+
+/* Session actions ---------------------------------------------------------- */
+
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem 1rem;
+}
+
+.session-actions.btns {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+
+.save-status {
+  font-size: 0.85rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.save-status:empty {
+  display: none;
 }
 
 .spinner {

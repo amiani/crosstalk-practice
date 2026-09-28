@@ -8,6 +8,13 @@ export interface PracticeSettingsShape {
   readonly minUtterances: number;
   /** Unanswered sentences to keep generated ahead of the learner. */
   readonly bufferSize: number;
+  /**
+   * Curriculum sentences to keep ahead: enough to ride out slow or failed
+   * writing rounds. Eligibility is rechecked when they are served.
+   */
+  readonly curriculumBufferSize: number;
+  /** Curriculum sentences written at the same time. */
+  readonly curriculumConcurrency: number;
   /** Sentences requested from the author per call. */
   readonly batchSize: number;
   /** Recent sentences shown to the author to discourage near-repeats. */
@@ -25,6 +32,8 @@ export class PracticeSettings extends Context.Service<
   public static readonly defaults: PracticeSettingsShape = {
     batchSize: 5,
     bufferSize: 6,
+    curriculumBufferSize: 10,
+    curriculumConcurrency: 4,
     dataDir: "data",
     maxRecordingSeconds: 30 * 60,
     maxStruggles: 3,
@@ -44,6 +53,14 @@ export class PracticeSettings extends Context.Service<
         ...defaults,
         batchSize: yield* int("PRACTICE_BATCH_SIZE", defaults.batchSize),
         bufferSize: yield* int("PRACTICE_BUFFER_SIZE", defaults.bufferSize),
+        curriculumBufferSize: yield* int(
+          "CURRICULUM_BUFFER_SIZE",
+          defaults.curriculumBufferSize,
+        ),
+        curriculumConcurrency: yield* int(
+          "CURRICULUM_CONCURRENCY",
+          defaults.curriculumConcurrency,
+        ),
         dataDir: yield* Config.String("DATA_DIR").pipe(
           Config.withDefault(defaults.dataDir),
         ),

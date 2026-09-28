@@ -14,6 +14,12 @@ import { Config, Effect, Layer, Redacted, String } from "effect";
  * The session records the practice mode new sentences are written in; each
  * sentence records the mode and generation-policy version it was written
  * under, which never change afterwards.
+ *
+ * Curriculum practice adds a track to sessions and sentences (curriculum
+ * sentences have no practice mode), a plan per curriculum sentence recording
+ * why it was chosen, and curriculum evidence: one row per curriculum
+ * response, self-contained so it survives replacing the recording. Only
+ * "Start over" deletes evidence.
  */
 export const migrationSteps = {
   "0001_practice": Effect.gen(function* () {
@@ -134,6 +140,91 @@ export const migrationSteps = {
     `;
     yield* sql`
       CREATE INDEX practice_sentences_session_mode_position ON practice_sentences (session_id, generation_mode, position)
+    `;
+  }),
+  "0004_curriculum": Effect.gen(function* () {
+    const sql = yield* PgClient.PgClient;
+    // Everything that exists already is crosstalk practice.
+    yield* sql`
+      ALTER TABLE practice_sessions
+      ADD COLUMN track text NOT NULL DEFAULT 'crosstalk' CHECK (track IN ('crosstalk', 'curriculum'))
+    `;
+    yield* sql`
+      ALTER TABLE practice_sessions
+      ALTER COLUMN track
+      DROP DEFAULT
+    `;
+    yield* sql`
+      ALTER TABLE practice_sentences
+      ADD COLUMN track text NOT NULL DEFAULT 'crosstalk' CHECK (track IN ('crosstalk', 'curriculum')),
+      ADD COLUMN speech_source text
+    `;
+    yield* sql`
+      ALTER TABLE practice_sentences
+      ALTER COLUMN track
+      DROP DEFAULT,
+      ALTER COLUMN generation_mode
+      DROP NOT NULL,
+      ADD CHECK ((track = 'crosstalk') = (generation_mode IS NOT NULL))
+    `;
+    yield* sql`
+      CREATE INDEX practice_sentences_session_track_position ON practice_sentences (session_id, track, position)
+    `;
+    yield* sql`
+      CREATE TABLE curriculum_plans (
+        plan_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        seq bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
+        session_id uuid NOT NULL REFERENCES practice_sessions (session_id) ON DELETE CASCADE,
+        sentence_id uuid UNIQUE REFERENCES practice_sentences (sentence_id) ON DELETE CASCADE,
+        status text NOT NULL CHECK (status IN ('pending', 'written', 'failed')),
+        catalog_version text NOT NULL,
+        target_id text NOT NULL,
+        target_revision integer NOT NULL,
+        role text NOT NULL CHECK (role IN ('teaching', 'transfer', 'review')),
+        easier boolean NOT NULL,
+        family text NOT NULL,
+        reason text NOT NULL,
+        decision jsonb NOT NULL,
+        model_version text NOT NULL,
+        selection_version text NOT NULL,
+        author_version text NOT NULL,
+        content_key text,
+        realisation text,
+        review_note text,
+        created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+        CHECK ((status = 'written') = (sentence_id IS NOT NULL))
+      )
+    `;
+    yield* sql`
+      CREATE TABLE curriculum_evidence (
+        evidence_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        sentence_id uuid UNIQUE REFERENCES practice_sentences (sentence_id) ON DELETE SET NULL,
+        plan_seq bigint NOT NULL,
+        catalog_version text NOT NULL,
+        target_id text NOT NULL,
+        target_revision integer NOT NULL,
+        role text NOT NULL CHECK (role IN ('teaching', 'transfer', 'review')),
+        family text NOT NULL,
+        content_key text NOT NULL,
+        finnish text NOT NULL,
+        english text NOT NULL,
+        understood boolean NOT NULL,
+        translation_revealed boolean NOT NULL,
+        started_playbacks integer CHECK (started_playbacks >= 0),
+        trace_complete boolean NOT NULL,
+        usable boolean,
+        responded_at timestamptz NOT NULL,
+        revision integer NOT NULL DEFAULT 1,
+        updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+      )
+    `;
+  }),
+  "0005_curriculum_rejections": Effect.gen(function* () {
+    const sql = yield* PgClient.PgClient;
+    // Why drafts for a plan were rejected, for auditing the author.
+    yield* sql`
+      ALTER TABLE curriculum_plans
+      ADD COLUMN rejections jsonb
     `;
   }),
 };

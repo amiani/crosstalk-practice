@@ -11,6 +11,8 @@ import {
 
 import { audioPath } from "../api/Api.ts";
 import { RecordingConverter } from "../audio/RecordingConverter.ts";
+import { Curriculum } from "../curriculum/Curriculum.ts";
+import { CurriculumStore } from "../curriculum/CurriculumStore.ts";
 import {
   NoActiveSession,
   NotRetryable,
@@ -22,6 +24,7 @@ import type {
   PracticeItem,
   PracticeMode,
   PracticeResponse,
+  PracticeTrack,
   PresentationConflict,
   PresentationEvent,
   PresentationId,
@@ -36,6 +39,8 @@ import type { SessionRecord } from "./PracticeStore.ts";
 import { PracticeWorker } from "./PracticeWorker.ts";
 
 const UPCOMING_LIMIT = 3;
+/** Enough for the page to tell when a reserve of sentences is ready. */
+const CURRICULUM_UPCOMING_LIMIT = 4;
 
 /** An uploaded file, valid only for the duration of the upload request. */
 export interface UploadedRecording {
@@ -51,6 +56,7 @@ export class Practice extends Context.Service<
     readonly start: (
       upload: UploadedRecording,
       mode: PracticeMode,
+      track: PracticeTrack,
     ) => Effect.Effect<
       SessionView,
       SessionAlreadyExists | RecordingRejected | PracticeStoreError
@@ -62,12 +68,29 @@ export class Practice extends Context.Service<
     readonly setMode: (
       mode: PracticeMode,
     ) => Effect.Effect<SessionView, NoActiveSession | PracticeStoreError>;
+    /**
+     * Selects the track future sentences are served from; like a mode
+     * change, it applies after the current sentence.
+     */
+    readonly setTrack: (
+      track: PracticeTrack,
+    ) => Effect.Effect<SessionView, NoActiveSession | PracticeStoreError>;
     readonly retry: Effect.Effect<
       SessionView,
       NoActiveSession | NotRetryable | PracticeStoreError
     >;
+    /** Start over: deletes the session and all curriculum progress. */
     readonly reset: Effect.Effect<void, PracticeStoreError>;
+    /**
+     * Deletes the session to make way for a new recording, keeping the
+     * curriculum evidence gathered so far.
+     */
+    readonly replaceRecording: Effect.Effect<void, PracticeStoreError>;
     readonly upcoming: Effect.Effect<
+      ReadonlyArray<PracticeItem>,
+      NoActiveSession | PracticeStoreError
+    >;
+    readonly curriculumUpcoming: Effect.Effect<
       ReadonlyArray<PracticeItem>,
       NoActiveSession | PracticeStoreError
     >;
@@ -81,7 +104,21 @@ export class Practice extends Context.Service<
       | PresentationConflict
       | PracticeStoreError
     >;
-    /** Appends to a presentation's interaction log; never affects practice. */
+    /** Records a curriculum response; resending the same one succeeds. */
+    readonly curriculumRespond: (
+      sentenceId: SentenceId,
+      response: PracticeResponse,
+    ) => Effect.Effect<
+      void,
+      | SentenceNotFound
+      | AlreadyAnswered
+      | PresentationConflict
+      | PracticeStoreError
+    >;
+    /**
+     * Appends to a presentation's interaction log. For curriculum sentences
+     * it refines their evidence; it never affects crosstalk practice.
+     */
     readonly recordPresentationEvents: (
       sentenceId: SentenceId,
       presentationId: PresentationId,
@@ -99,6 +136,8 @@ export class Practice extends Context.Service<
     Practice,
     Effect.gen(function* () {
       const store = yield* PracticeStore;
+      const curriculumStore = yield* CurriculumStore;
+      const curriculum = yield* Curriculum;
       const worker = yield* PracticeWorker;
       const converter = yield* RecordingConverter;
       const settings = yield* PracticeSettings;
@@ -114,6 +153,7 @@ export class Practice extends Context.Service<
           fileName: session.fileName,
           mode: session.mode,
           sessionId: session.sessionId,
+          track: session.track,
         };
         switch (session.stage) {
           case "transcribing":
@@ -169,7 +209,11 @@ export class Practice extends Context.Service<
         new PracticeStoreError({ cause });
 
       const start = Effect.fn("Practice.start")(
-        function* (upload: UploadedRecording, mode: PracticeMode) {
+        function* (
+          upload: UploadedRecording,
+          mode: PracticeMode,
+          track: PracticeTrack,
+        ) {
           if (Option.isSome(yield* store.current)) {
             return yield* new SessionAlreadyExists();
           }
@@ -198,6 +242,7 @@ export class Practice extends Context.Service<
               recordingMimeType: converted.mimeType,
               recordingPath: converted.path,
               recordingSeconds: converted.seconds,
+              track,
             })
             .pipe(
               Effect.tapError(() =>
@@ -240,12 +285,35 @@ export class Practice extends Context.Service<
         return yield* view;
       });
 
-      const reset = Effect.gen(function* () {
+      const setTrack = Effect.fn("Practice.setTrack")(function* (
+        track: PracticeTrack,
+      ) {
+        const current = yield* store.current;
+        if (Option.isNone(current)) {
+          return yield* new NoActiveSession();
+        }
+        if (current.value.track !== track) {
+          yield* store.setTrack(current.value.sessionId, track);
+          yield* worker.wake;
+        }
+        return yield* view;
+      });
+
+      const removeSession = Effect.gen(function* () {
         const removed = yield* store.remove;
         if (Option.isSome(removed) && removed.value.recordingPath !== null) {
           yield* fs.remove(removed.value.recordingPath).pipe(Effect.ignore);
         }
+      });
+
+      const reset = Effect.gen(function* () {
+        yield* removeSession;
+        yield* curriculumStore.clear;
       }).pipe(Effect.withSpan("Practice.reset"));
+
+      const replaceRecording = removeSession.pipe(
+        Effect.withSpan("Practice.replaceRecording"),
+      );
 
       const upcoming = Effect.gen(function* () {
         const current = yield* store.current;
@@ -262,8 +330,20 @@ export class Practice extends Context.Service<
           english: sentence.english,
           mode: sentence.mode,
           sentenceId: sentence.sentenceId,
+          track: sentence.track,
         }));
       }).pipe(Effect.withSpan("Practice.upcoming"));
+
+      const curriculumUpcoming = Effect.gen(function* () {
+        const current = yield* store.current;
+        if (Option.isNone(current) || current.value.stage !== "ready") {
+          return yield* new NoActiveSession();
+        }
+        return yield* curriculum.upcoming(
+          current.value.sessionId,
+          CURRICULUM_UPCOMING_LIMIT,
+        );
+      }).pipe(Effect.withSpan("Practice.curriculumUpcoming"));
 
       const respond = Effect.fn("Practice.respond")(function* (
         sentenceId: SentenceId,
@@ -273,13 +353,41 @@ export class Practice extends Context.Service<
         yield* worker.wake;
       });
 
+      const curriculumRespond = Effect.fn("Practice.curriculumRespond")(
+        function* (sentenceId: SentenceId, response: PracticeResponse) {
+          yield* curriculumStore.respond(sentenceId, response);
+          yield* worker.wake;
+        },
+      );
+
+      const recordPresentationEvents = Effect.fn(
+        "Practice.recordPresentationEvents",
+      )(function* (
+        sentenceId: SentenceId,
+        presentationId: PresentationId,
+        events: ReadonlyArray<PresentationEvent>,
+      ) {
+        yield* store.recordPresentationEvents(
+          sentenceId,
+          presentationId,
+          events,
+        );
+        if (yield* curriculumStore.refreshEvidence(sentenceId)) {
+          yield* worker.wake;
+        }
+      });
+
       return Practice.of({
         audio: store.audio,
-        recordPresentationEvents: store.recordPresentationEvents,
+        curriculumRespond,
+        curriculumUpcoming,
+        recordPresentationEvents,
+        replaceRecording,
         reset,
         respond,
         retry,
         setMode,
+        setTrack,
         start,
         upcoming,
         view,

@@ -3,7 +3,11 @@ import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { Api } from "../api/Api.ts";
-import { SentenceId, UNSPECIFIED_PRACTICE_MODE } from "../domain/model.ts";
+import {
+  SentenceId,
+  UNSPECIFIED_PRACTICE_MODE,
+  UNSPECIFIED_PRACTICE_TRACK,
+} from "../domain/model.ts";
 import { Practice } from "../practice/Practice.ts";
 
 /**
@@ -28,14 +32,17 @@ const sessionHandlers = HttpApiBuilder.group(
     const practice = yield* Practice;
     return handlers.handleAll({
       current: () => orDieOnStore(practice.view),
+      replaceRecording: () => orDieOnStore(practice.replaceRecording),
       reset: () => orDieOnStore(practice.reset),
       retry: () => orDieOnStore(practice.retry),
       setMode: ({ payload }) => orDieOnStore(practice.setMode(payload.mode)),
+      setTrack: ({ payload }) => orDieOnStore(practice.setTrack(payload.track)),
       upload: ({ payload }) =>
         orDieOnStore(
           practice.start(
             payload.recording,
             payload.mode ?? UNSPECIFIED_PRACTICE_MODE,
+            payload.track ?? UNSPECIFIED_PRACTICE_TRACK,
           ),
         ),
     });
@@ -59,6 +66,19 @@ const practiceHandlers = HttpApiBuilder.group(
       respond: ({ params, payload }) =>
         orDieOnStore(practice.respond(params.sentenceId, payload)),
       upcoming: () => orDieOnStore(practice.upcoming),
+    });
+  }),
+);
+
+const curriculumHandlers = HttpApiBuilder.group(
+  Api,
+  "curriculum",
+  Effect.fn(function* (handlers) {
+    const practice = yield* Practice;
+    return handlers.handleAll({
+      respond: ({ params, payload }) =>
+        orDieOnStore(practice.curriculumRespond(params.sentenceId, payload)),
+      upcoming: () => orDieOnStore(practice.curriculumUpcoming),
     });
   }),
 );
@@ -92,7 +112,7 @@ const audioRoute = HttpRouter.add(
 
 export const apiRoutes = Layer.mergeAll(
   HttpApiBuilder.layer(Api).pipe(
-    Layer.provide([sessionHandlers, practiceHandlers]),
+    Layer.provide([sessionHandlers, practiceHandlers, curriculumHandlers]),
   ),
   audioRoute,
 );

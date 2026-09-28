@@ -53,6 +53,7 @@ export const openRouterSpeechSynthesizerLayer = (
               pcmFormatFromContentType(speech.contentType, GEMINI_PCM),
             ),
             mimeType: "audio/wav",
+            source: `${options.model} voice=${options.voice}`,
           };
         },
         Effect.mapError((error) =>

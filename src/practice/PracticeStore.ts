@@ -6,6 +6,7 @@ import type {
   PracticeMode,
   PracticeResponse,
   PracticeStats,
+  PracticeTrack,
   PresentationConflict,
   PresentationEvent,
   PresentationId,
@@ -33,6 +34,8 @@ export interface SessionRecord {
   readonly fileName: string;
   /** The mode new sentences are written in; the learner may change it. */
   readonly mode: PracticeMode;
+  /** The practice new sentences are served from; the learner may change it. */
+  readonly track: PracticeTrack;
   readonly stage: SessionStage;
   readonly failedStage: PreparationStep | null;
   readonly failure: SessionFailure | null;
@@ -48,6 +51,7 @@ export interface SessionRecord {
 export interface NewSession {
   readonly fileName: string;
   readonly mode: PracticeMode;
+  readonly track: PracticeTrack;
   readonly recordingPath: string;
   readonly recordingMimeType: string;
   readonly recordingSeconds: number;
@@ -57,6 +61,7 @@ export interface UpcomingSentence {
   readonly sentenceId: SentenceId;
   readonly english: string;
   readonly mode: PracticeMode;
+  readonly track: "crosstalk";
 }
 
 /** The rules a batch of sentences was written under; stored with each. */
@@ -117,27 +122,36 @@ export class PracticeStore extends Context.Service<
       sessionId: SessionId,
       mode: PracticeMode,
     ) => Stored<void>;
+    /** Changes the track future sentences are written and served in. */
+    readonly setTrack: (
+      sessionId: SessionId,
+      track: PracticeTrack,
+    ) => Stored<void>;
 
-    /** Answer counts, and voiced unanswered sentences of every mode. */
+    /** Answer counts, and voiced unanswered sentences of every mode and track. */
     readonly stats: (sessionId: SessionId) => Stored<PracticeStats>;
-    /** Sentences of a mode generated but not yet answered, with or without audio. */
+    /**
+     * Crosstalk sentences of a mode generated but not yet answered, with or
+     * without audio. (Every crosstalk query below ignores curriculum
+     * sentences, which have no mode.)
+     */
     readonly unansweredCount: (
       sessionId: SessionId,
       mode: PracticeMode,
     ) => Stored<number>;
-    /** The latest sentences of every mode, to discourage near-repeats. */
+    /** The latest crosstalk sentences of every mode, to discourage near-repeats. */
     readonly recentSentences: (
       sessionId: SessionId,
       limit: number,
     ) => Stored<ReadonlyArray<string>>;
-    /** Failures among the learner's most recent `window` responses. */
+    /** Failures among the learner's most recent `window` crosstalk responses. */
     readonly recentStruggles: (
       sessionId: SessionId,
       window: number,
     ) => Stored<ReadonlyArray<Struggle>>;
     /**
      * Stores drafts, skipping any whose normalized text already exists in
-     * the session in any mode. Returns how many were new.
+     * the session in any mode or track. Returns how many were new.
      */
     readonly insertSentences: (
       sessionId: SessionId,

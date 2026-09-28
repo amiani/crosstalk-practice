@@ -4,6 +4,7 @@ import { Effect, Layer, Option, Schema } from "effect";
 import {
   AlreadyAnswered,
   PracticeMode,
+  PracticeTrack,
   PRESENTATION_EVENT_SCHEMA_VERSION,
   PresentationConflict,
   SentenceId,
@@ -17,6 +18,7 @@ import {
 import type {
   PracticeMode as PracticeModeType,
   PracticeResponse,
+  PracticeTrack as PracticeTrackType,
   PresentationEvent,
   PresentationId,
   SessionFailure as SessionFailureType,
@@ -44,6 +46,7 @@ const SessionRow = Schema.Struct({
   recordingSeconds: Schema.Finite,
   sessionId: SessionId,
   stage: Schema.Literals(["transcribing", "analyzing", "ready", "failed"]),
+  track: PracticeTrack,
   transcript: Schema.NullOr(Transcript),
 });
 const decodeSessions = Schema.decodeUnknownEffect(Schema.Array(SessionRow));
@@ -83,6 +86,7 @@ const decodeUpcoming = Schema.decodeUnknownEffect(
       english: Schema.String,
       mode: PracticeMode,
       sentenceId: SentenceId,
+      track: Schema.Literal("crosstalk"),
     }),
   ),
 );
@@ -117,6 +121,7 @@ export const practiceStorePostgres = Layer.effect(
         session_id,
         file_name,
         mode,
+        track,
         stage,
         failed_stage,
         failure,
@@ -141,12 +146,14 @@ export const practiceStorePostgres = Layer.effect(
               recordingPath: session.recordingPath,
               recordingSeconds: session.recordingSeconds,
               stage: "transcribing",
+              track: session.track,
             })}
           ON CONFLICT (singleton) DO NOTHING
           RETURNING
             session_id,
             file_name,
             mode,
+            track,
             stage,
             failed_stage,
             failure,
@@ -182,6 +189,7 @@ export const practiceStorePostgres = Layer.effect(
         session_id,
         file_name,
         mode,
+        track,
         stage,
         failed_stage,
         failure,
@@ -279,6 +287,20 @@ export const practiceStorePostgres = Layer.effect(
       `;
     }, Effect.mapError(storeError));
 
+    const setTrack = Effect.fn("PracticeStore.setTrack")(function* (
+      sessionId: SessionId,
+      track: PracticeTrackType,
+    ) {
+      yield* sql`
+        UPDATE practice_sessions
+        SET
+          track = ${track},
+          updated_at = clock_timestamp()
+        WHERE
+          session_id = ${sessionId}
+      `;
+    }, Effect.mapError(storeError));
+
     const stats = Effect.fn("PracticeStore.stats")(function* (
       sessionId: SessionId,
     ) {
@@ -330,6 +352,7 @@ export const practiceStorePostgres = Layer.effect(
             practice_sentences
           WHERE
             session_id = ${sessionId}
+            AND track = 'crosstalk'
           ORDER BY
             position DESC
           LIMIT
@@ -360,6 +383,7 @@ export const practiceStorePostgres = Layer.effect(
                 JOIN practice_sentences s ON s.sentence_id = r.sentence_id
               WHERE
                 s.session_id = ${sessionId}
+                AND s.track = 'crosstalk'
               ORDER BY
                 r.answered_at DESC
               LIMIT
@@ -392,6 +416,7 @@ export const practiceStorePostgres = Layer.effect(
               english,
               normalized,
               variation_of,
+              track,
               generation_mode,
               generation_policy
             )
@@ -401,6 +426,7 @@ export const practiceStorePostgres = Layer.effect(
             d.english,
             d.normalized,
             d.variation_of::uuid,
+            'crosstalk',
             ${policy.mode},
             ${policy.version}
           FROM
@@ -449,7 +475,8 @@ export const practiceStorePostgres = Layer.effect(
         UPDATE practice_sentences
         SET
           audio = ${speech.bytes},
-          audio_mime_type = ${speech.mimeType}
+          audio_mime_type = ${speech.mimeType},
+          speech_source = ${speech.source ?? null}
         WHERE
           sentence_id = ${sentenceId}
       `;
@@ -464,7 +491,8 @@ export const practiceStorePostgres = Layer.effect(
         SELECT
           s.sentence_id,
           s.english,
-          s.generation_mode AS mode
+          s.generation_mode AS mode,
+          s.track
         FROM
           practice_sentences s
           LEFT JOIN practice_responses r ON r.sentence_id = s.sentence_id
@@ -686,6 +714,7 @@ export const practiceStorePostgres = Layer.effect(
       saveProfile,
       saveTranscript,
       setMode,
+      setTrack,
       stats,
       unansweredCount,
       upcoming,

@@ -1,15 +1,28 @@
-/* eslint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-fetch, effecttsgo/global-timers, effecttsgo/new-promise -- The browser client is deliberately plain DOM and promise code; Effect is used only for the shared API schema and generated client. */
-import { DEFAULT_PRACTICE_MODE } from "../src/domain/model.ts";
+/* eslint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-date, effecttsgo/global-fetch, effecttsgo/global-timers, effecttsgo/new-promise -- The browser client is deliberately plain DOM and promise code; Effect is used only for the shared API schema and generated client. */
+import {
+  DEFAULT_PRACTICE_MODE,
+  DEFAULT_PRACTICE_TRACK,
+} from "../src/domain/model.ts";
 import type {
   PracticeItem,
   PracticeMode,
+  PracticeTrack,
   PresentationEventDetail,
   SessionView,
 } from "../src/domain/model.ts";
 import * as api from "./api.ts";
-import { acceptUpcoming, keepCurrent } from "./practiceQueue.ts";
+import {
+  acceptUpcoming,
+  holdForReserve,
+  keepCurrent,
+  QUEUE_CAPACITY,
+  RESUME_RESERVE,
+  sameStream,
+} from "./practiceQueue.ts";
+import type { PracticeStream } from "./practiceQueue.ts";
 import { PresentationOutbox, randomUuid } from "./presentationLog.ts";
 import type { Presentation } from "./presentationLog.ts";
+import { ResponseOutbox } from "./responseOutbox.ts";
 
 // ---------------------------------------------------------------------------
 // Tiny DOM helpers.
@@ -55,57 +68,81 @@ const show = (...children: ReadonlyArray<Child>): number => {
 const sleep = async (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // ---------------------------------------------------------------------------
-// Practice mode selector.
+// Practice track and mode selectors.
 // ---------------------------------------------------------------------------
 
-const modeOptions: ReadonlyArray<{
-  readonly mode: PracticeMode;
+interface ChoiceOption<T extends string> {
+  readonly value: T;
   readonly label: string;
   readonly description: string;
-}> = [
+}
+
+/**
+ * The learner-facing names of the tracks. They never mention concepts,
+ * progress or mastery: what is being taught stays behind the scenes.
+ */
+const trackOptions: ReadonlyArray<ChoiceOption<PracticeTrack>> = [
+  {
+    description:
+      "Learn the small words and endings that hold Finnish sentences together, one idea at a time, using words from your conversation.",
+    label: "Building blocks",
+    value: "curriculum",
+  },
+  {
+    description: "New sentences built from what you heard.",
+    label: "Conversation",
+    value: "crosstalk",
+  },
+];
+
+const modeOptions: ReadonlyArray<ChoiceOption<PracticeMode>> = [
   {
     description: "Simple sentences with a single clause.",
     label: "Beginner",
-    mode: "beginner",
+    value: "beginner",
   },
   {
     description: "Any sentence structure, including longer sentences.",
     label: "Intermediate",
-    mode: "intermediate",
+    value: "intermediate",
   },
 ];
 
-let modeControls = 0;
+let choiceControls = 0;
 
 /** A labelled radio group; native radios keep it keyboard accessible. */
-class ModeControl {
+class Choice<T extends string> {
   public readonly element: HTMLFieldSetElement;
-  private readonly inputs = new Map<PracticeMode, HTMLInputElement>();
+  private readonly inputs = new Map<T, HTMLInputElement>();
+  private readonly fallback: T;
 
   public constructor(
-    initial: PracticeMode,
-    onChange: (mode: PracticeMode) => void,
+    legend: string,
+    options: ReadonlyArray<ChoiceOption<T>>,
+    initial: T,
+    onChange: (value: T) => void,
     status?: HTMLElement,
   ) {
-    modeControls += 1;
-    const name = `practice-mode-${modeControls}`;
+    choiceControls += 1;
+    const name = `practice-choice-${choiceControls}`;
+    this.fallback = initial;
     this.element = h(
       "fieldset",
       { class: "mode" },
-      h("legend", {}, "Sentence level"),
-      ...modeOptions.map((option) => {
+      h("legend", {}, legend),
+      ...options.map((option) => {
         const input = h("input", {
-          checked: option.mode === initial,
+          checked: option.value === initial,
           name,
           type: "radio",
-          value: option.mode,
+          value: option.value,
         });
         input.addEventListener("change", () => {
           if (input.checked) {
-            onChange(option.mode);
+            onChange(option.value);
           }
         });
-        this.inputs.set(option.mode, input);
+        this.inputs.set(option.value, input);
         return h(
           "label",
           { class: "mode-option" },
@@ -122,17 +159,17 @@ class ModeControl {
     );
   }
 
-  public get value(): PracticeMode {
-    for (const [mode, input] of this.inputs) {
+  public get value(): T {
+    for (const [value, input] of this.inputs) {
       if (input.checked) {
-        return mode;
+        return value;
       }
     }
-    return DEFAULT_PRACTICE_MODE;
+    return this.fallback;
   }
 
-  public set value(mode: PracticeMode) {
-    const input = this.inputs.get(mode);
+  public set value(value: T) {
+    const input = this.inputs.get(value);
     if (input !== undefined) {
       input.checked = true;
     }
@@ -141,40 +178,79 @@ class ModeControl {
   public set disabled(disabled: boolean) {
     this.element.disabled = disabled;
   }
+
+  public set hidden(hidden: boolean) {
+    this.element.hidden = hidden;
+  }
 }
 
+const trackChoice = (
+  initial: PracticeTrack,
+  onChange: (track: PracticeTrack) => void,
+  status?: HTMLElement,
+) => new Choice("What to practice", trackOptions, initial, onChange, status);
+
+const modeChoice = (
+  initial: PracticeMode,
+  onChange: (mode: PracticeMode) => void,
+  status?: HTMLElement,
+) => new Choice("Sentence level", modeOptions, initial, onChange, status);
+
+/** The sentence level only applies to Conversation practice. */
+const modeApplies = (track: PracticeTrack): boolean => track === "crosstalk";
+
 // ---------------------------------------------------------------------------
-// Presentation log: how each sentence was listened to, for later analysis.
+// Presentation log (how each sentence was listened to) and curriculum
+// answers, both delivered in the background and kept until stored.
 // ---------------------------------------------------------------------------
+
+const storage = (() => {
+  try {
+    return window.localStorage;
+  } catch {
+    return undefined;
+  }
+})();
 
 const outbox = new PresentationOutbox({
   send: api.sendPresentationEvents,
-  storage: (() => {
-    try {
-      return window.localStorage;
-    } catch {
-      return undefined;
-    }
-  })(),
+  storage,
+});
+const responses = new ResponseOutbox({
+  send: api.sendCurriculumResponse,
+  storage,
 });
 // Deliver whatever an earlier visit could not.
 void outbox.flush();
+void responses.flush();
+
+/** How long an answer may wait before the page says it is still saving. */
+const SAVE_HINT_DELAY_MS = 4000;
 
 document.addEventListener("visibilitychange", () => {
   const visible = document.visibilityState === "visible";
   practice?.visibilityChanged(visible);
   if (!visible) {
     outbox.flushOnExit();
+    responses.flushOnExit();
   } else {
-    // The mode may have been changed in another tab meanwhile.
+    void responses.flush();
+    // The track or mode may have been changed in another tab meanwhile.
     void practice?.sync();
   }
 });
-window.addEventListener("pagehide", () => outbox.flushOnExit());
+window.addEventListener("pagehide", () => {
+  outbox.flushOnExit();
+  responses.flushOnExit();
+});
+window.addEventListener("online", () => {
+  void outbox.flush();
+  void responses.flush();
+});
 
 const knownErrors: Record<string, string> = {
   NoActiveSession: "There is no active session.",
-  NotRetryable: "This step can't be retried. Start over with a new recording.",
+  NotRetryable: "This step can't be retried. Try a new recording.",
   SessionAlreadyExists: "A session already exists.",
 };
 
@@ -233,10 +309,30 @@ const render = (view: SessionView): void => {
   }
 };
 
+/** Deletes this recording's session; Building blocks progress is kept. */
+const newRecording = async (): Promise<void> => {
+  if (
+    !confirm(
+      "Use a new recording?\n\nThis recording, the sentences made from it, their audio and your listening logs will be deleted.\n\nYour Building blocks progress is kept: what you've understood, and the text of those sentences.",
+    )
+  ) {
+    return;
+  }
+  try {
+    // Let the last answers count before their sentences go away.
+    await Promise.race([responses.flush(), sleep(3000)]);
+    await api.replaceRecording();
+  } catch (error) {
+    alert(errorText(error));
+  }
+  await refresh();
+};
+
+/** Deletes everything, including all Building blocks progress. */
 const startOver = async (): Promise<void> => {
   if (
     !confirm(
-      "Start over with a new recording? Your current session will be deleted.",
+      "Start over and delete everything?\n\nYour recording, its sentences and audio, your listening logs and all your Building blocks progress will be deleted. This can't be undone.",
     )
   ) {
     return;
@@ -248,6 +344,23 @@ const startOver = async (): Promise<void> => {
   }
   await refresh();
 };
+
+/** The two ways out of a session, as links or as buttons. */
+const sessionActions = (style: "link" | "btn"): HTMLElement =>
+  h(
+    "div",
+    { class: `session-actions ${style}s` },
+    h(
+      "button",
+      { class: style, onclick: () => void newRecording() },
+      "New recording (keep progress)",
+    ),
+    h(
+      "button",
+      { class: style, onclick: () => void startOver() },
+      "Start over (delete everything)",
+    ),
+  );
 
 const renderConnectionError = (error: unknown): void => {
   show(
@@ -289,7 +402,11 @@ const renderUpload = (): void => {
   );
   const status = h("p", { class: "status", role: "status" });
   const progress = h("progress", { hidden: true, max: 1, value: 0 });
-  const mode = new ModeControl(DEFAULT_PRACTICE_MODE, () => {});
+  const mode = modeChoice(DEFAULT_PRACTICE_MODE, () => {});
+  mode.hidden = !modeApplies(DEFAULT_PRACTICE_TRACK);
+  const track = trackChoice(DEFAULT_PRACTICE_TRACK, (chosen) => {
+    mode.hidden = !modeApplies(chosen);
+  });
 
   input.addEventListener("change", () => {
     const file = input.files?.[0];
@@ -307,13 +424,14 @@ const renderUpload = (): void => {
     button.disabled = true;
     input.disabled = true;
     mode.disabled = true;
+    track.disabled = true;
     pick.classList.add("disabled");
     progress.hidden = false;
     progress.removeAttribute("value");
     status.classList.remove("error");
     status.textContent = "Uploading…";
     try {
-      await api.uploadRecording(file, mode.value, (fraction) => {
+      await api.uploadRecording(file, track.value, mode.value, (fraction) => {
         progress.value = fraction;
         status.textContent =
           fraction >= 1
@@ -335,6 +453,7 @@ const renderUpload = (): void => {
       button.disabled = false;
       input.disabled = false;
       mode.disabled = false;
+      track.disabled = false;
       pick.classList.remove("disabled");
     }
   };
@@ -348,10 +467,11 @@ const renderUpload = (): void => {
       h(
         "p",
         { class: "muted" },
-        "Upload a recording of a crosstalk conversation. You'll get an endless stream of new Finnish sentences built from it to practice listening.",
+        "Upload a recording of a crosstalk conversation. You'll get an endless stream of Finnish sentences to listen to, built from its words.",
       ),
       input,
       pick,
+      track.element,
       mode.element,
       button,
       progress,
@@ -383,11 +503,7 @@ const renderPreparing = (stage: string): void => {
         { class: "muted" },
         "This can take a few minutes for long recordings.",
       ),
-      h(
-        "button",
-        { class: "link", onclick: () => void startOver() },
-        "Start over with a new recording",
-      ),
+      sessionActions("link"),
     ),
   );
   void sleep(3000).then(() => {
@@ -422,11 +538,7 @@ const renderFailed = (failure: {
       h("h1", {}, "Preparation failed"),
       h("p", {}, failure.message),
       retry,
-      h(
-        "button",
-        { class: "btn", onclick: () => void startOver() },
-        "Start over",
-      ),
+      sessionActions("btn"),
       status,
     ),
   );
@@ -448,12 +560,15 @@ class Practice {
   private readonly token: number;
   private readonly audio = new Audio();
   private queue: Array<PracticeItem> = [];
-  /** The mode future sentences come from, as last confirmed by the server. */
+  /** The track future sentences come from, as last confirmed by the server. */
+  private track: PracticeTrack;
+  /** The mode of future crosstalk sentences, as last confirmed by the server. */
   private mode: PracticeMode;
-  private savingMode = false;
+  /** A track or mode change is being saved. */
+  private saving = false;
   /**
-   * Bumped when the mode changes, so `upcoming` responses requested before
-   * the change are discarded rather than queued.
+   * Bumped when the stream changes, so `upcoming` responses requested
+   * before the change are discarded rather than queued.
    */
   private queueGeneration = 0;
   /** Sentences answered locally, so a stale `upcoming` never shows them again. */
@@ -466,6 +581,9 @@ class Practice {
   private plays = 0;
   private revealed = false;
   private fetching = false;
+  /** When the queue last ran dry, while it stays empty. */
+  private drySince: number | undefined;
+  private readonly saveTimer: ReturnType<typeof setInterval>;
   private answeredCount: number;
   private understoodCount: number;
 
@@ -489,28 +607,46 @@ class Practice {
   );
   private readonly hint = h("p", { class: "hint", role: "status" });
   private readonly stage = h("div", { class: "stage" });
+  private readonly waitingText = h("p", {}, "Preparing more sentences…");
   private readonly waiting = h(
     "div",
     { class: "waiting", hidden: true },
     h("div", { ariaHidden: "true", class: "spinner" }),
-    h("p", {}, "Preparing more sentences…"),
+    this.waitingText,
   );
   private readonly about = h("details", { class: "about" });
+  private readonly trackStatus = h("p", {
+    class: "mode-status",
+    role: "status",
+  });
   private readonly modeStatus = h("p", {
     class: "mode-status",
     role: "status",
   });
-  private readonly modeControl: ModeControl;
+  /** Says when a curriculum answer is taking a while to be stored. */
+  private readonly saveStatus = h("p", {
+    class: "save-status",
+    role: "status",
+  });
+  private readonly trackControl: Choice<PracticeTrack>;
+  private readonly modeControl: Choice<PracticeMode>;
 
   public constructor(view: ReadyView) {
     this.answeredCount = view.stats.answered;
     this.understoodCount = view.stats.understood;
+    this.track = view.track;
     this.mode = view.mode;
-    this.modeControl = new ModeControl(
+    this.trackControl = trackChoice(
+      view.track,
+      (track) => void this.changeTrack(track),
+      this.trackStatus,
+    );
+    this.modeControl = modeChoice(
       view.mode,
       (mode) => void this.changeMode(mode),
       this.modeStatus,
     );
+    this.modeControl.hidden = !modeApplies(view.track);
     this.audio.preload = "auto";
 
     this.playButton.addEventListener("click", () => void this.play());
@@ -573,20 +709,14 @@ class Practice {
     );
 
     this.token = show(
-      h(
-        "header",
-        { class: "bar" },
-        this.stats,
-        h(
-          "button",
-          { class: "link", onclick: () => void startOver() },
-          "Start over with a new recording",
-        ),
-      ),
+      h("header", { class: "bar" }, this.stats, sessionActions("link")),
       h("section", { class: "practice" }, this.stage, this.waiting),
+      this.saveStatus,
+      this.trackControl.element,
       this.modeControl.element,
       this.about,
     );
+    this.saveTimer = setInterval(() => this.renderSaveStatus(), 1000);
     this.updateSession(view);
     this.renderStats();
     this.showCurrent(false);
@@ -598,6 +728,7 @@ class Practice {
   }
 
   public dispose(): void {
+    clearInterval(this.saveTimer);
     this.stopPlayback("left");
     this.audio.pause();
     this.audio.removeAttribute("src");
@@ -614,8 +745,8 @@ class Practice {
   }
 
   public updateSession(view: ReadyView): void {
-    if (!this.savingMode) {
-      this.applyMode(view.mode);
+    if (!this.saving) {
+      this.applyStream(view.track, view.mode);
     }
     // Server stats may lag behind in-flight responses; never go backwards.
     this.answeredCount = Math.max(this.answeredCount, view.stats.answered);
@@ -651,45 +782,87 @@ class Practice {
     }
   }
 
-  private async changeMode(mode: PracticeMode): Promise<void> {
-    if (this.savingMode || mode === this.mode) {
+  private get stream(): PracticeStream {
+    return { mode: this.mode, track: this.track };
+  }
+
+  private async changeTrack(track: PracticeTrack): Promise<void> {
+    if (track === this.track) {
       return;
     }
-    this.savingMode = true;
+    await this.saveChange(
+      async () => api.setTrack(track),
+      this.trackStatus,
+      "Couldn't change what you practice",
+    );
+  }
+
+  private async changeMode(mode: PracticeMode): Promise<void> {
+    if (mode === this.mode) {
+      return;
+    }
+    await this.saveChange(
+      async () => api.setMode(mode),
+      this.modeStatus,
+      "Couldn't change the level",
+    );
+  }
+
+  /** Saves a track or mode change, then applies the server's view of it. */
+  private async saveChange(
+    request: () => Promise<SessionView>,
+    status: HTMLElement,
+    failure: string,
+  ): Promise<void> {
+    if (this.saving) {
+      return;
+    }
+    this.saving = true;
+    this.trackControl.disabled = true;
     this.modeControl.disabled = true;
-    this.modeStatus.classList.remove("error");
-    this.modeStatus.textContent = "Saving…";
+    for (const element of [this.trackStatus, this.modeStatus]) {
+      element.classList.remove("error");
+      element.textContent = "";
+    }
+    status.textContent = "Saving…";
     try {
-      const view = await api.setMode(mode);
+      const view = await request();
       if (!this.isMounted()) {
         return;
       }
-      this.savingMode = false;
-      this.modeStatus.textContent = "";
+      this.saving = false;
+      status.textContent = "";
       render(view);
     } catch (error) {
       if (!this.isMounted()) {
         return;
       }
+      this.trackControl.value = this.track;
       this.modeControl.value = this.mode;
-      this.modeStatus.classList.add("error");
-      this.modeStatus.textContent = `Couldn't change the level: ${errorText(error)}`;
+      status.classList.add("error");
+      status.textContent = `${failure}: ${errorText(error)}`;
     } finally {
-      this.savingMode = false;
+      this.saving = false;
+      this.trackControl.disabled = false;
       this.modeControl.disabled = false;
     }
   }
 
   /**
-   * Switches future sentences to `mode`. The sentence on screen stays, with
-   * its playback, translation and presentation; prefetched ones are dropped.
+   * Switches future sentences to the given track and mode. The sentence on
+   * screen stays, with its playback, translation and presentation;
+   * prefetched ones are dropped if they belong to another stream.
    */
-  private applyMode(mode: PracticeMode): void {
-    if (mode === this.mode) {
+  private applyStream(track: PracticeTrack, mode: PracticeMode): void {
+    const before = this.stream;
+    this.track = track;
+    this.mode = mode;
+    this.trackControl.value = track;
+    this.modeControl.value = mode;
+    this.modeControl.hidden = !modeApplies(track);
+    if (sameStream(before, this.stream)) {
       return;
     }
-    this.mode = mode;
-    this.modeControl.value = mode;
     this.queueGeneration += 1;
     const { kept, dropped } = keepCurrent(this.queue);
     this.queue = kept;
@@ -698,10 +871,26 @@ class Practice {
       this.audioUrls.delete(item.sentenceId);
       void url?.then(URL.revokeObjectURL, () => {});
     }
-    this.modeStatus.classList.remove("error");
-    this.modeStatus.textContent =
+    const status = before.track === track ? this.modeStatus : this.trackStatus;
+    for (const element of [this.trackStatus, this.modeStatus]) {
+      element.classList.remove("error");
+      element.textContent = "";
+    }
+    status.textContent =
       this.current === undefined ? "" : "Applies after this sentence.";
     void this.fill();
+  }
+
+  private renderSaveStatus(): void {
+    if (!this.isMounted()) {
+      clearInterval(this.saveTimer);
+      return;
+    }
+    const since = responses.oldestPendingAt();
+    this.saveStatus.textContent =
+      since !== undefined && Date.now() - since >= SAVE_HINT_DELAY_MS
+        ? "Saving your last answer…"
+        : "";
   }
 
   private renderStats(): void {
@@ -718,12 +907,16 @@ class Practice {
       return;
     }
     this.fetching = true;
+    let emptyPolls = 0;
     try {
-      while (this.isMounted() && this.queue.length < 2) {
+      while (this.isMounted() && this.queue.length < QUEUE_CAPACITY) {
         const generation = this.queueGeneration;
+        const stream = this.stream;
         let items: ReadonlyArray<PracticeItem>;
         try {
-          items = await api.upcoming();
+          items = await (stream.track === "curriculum"
+            ? api.curriculumUpcoming()
+            : api.upcoming());
         } catch {
           // Most likely the session went away (reset elsewhere); re-route.
           if (this.isMounted()) {
@@ -735,24 +928,47 @@ class Practice {
           return;
         }
         if (generation !== this.queueGeneration) {
-          // Asked before the mode changed; ask again.
+          // Asked before the stream changed; ask again.
           continue;
         }
-        const { accepted, otherMode } = acceptUpcoming(this.queue, items, {
+        const { accepted, otherStream } = acceptUpcoming(this.queue, items, {
           answered: this.answered,
-          mode: this.mode,
+          capacity: Number.POSITIVE_INFINITY,
+          stream,
         });
-        if (otherMode && !this.savingMode) {
-          // The server is in another mode, most likely changed elsewhere.
+        if (otherStream && !this.saving) {
+          // The server serves another stream, most likely changed elsewhere.
           void this.sync();
         }
         const wasEmpty = this.queue.length === 0;
-        this.queue.push(...accepted);
+        if (wasEmpty) {
+          this.drySince ??= Date.now();
+          if (
+            stream.track === "curriculum" &&
+            holdForReserve(accepted.length, Date.now() - this.drySince)
+          ) {
+            // Serving each sentence as it appears would mean waiting again
+            // after every one; build a small reserve first.
+            this.waitingText.textContent = `Preparing more sentences… ${accepted.length} of ${RESUME_RESERVE} ready`;
+            await sleep(2000);
+            continue;
+          }
+        }
+        this.queue.push(
+          ...accepted.slice(0, QUEUE_CAPACITY - this.queue.length),
+        );
         this.preload();
         if (wasEmpty && this.queue.length > 0) {
+          this.drySince = undefined;
+          this.waitingText.textContent = "Preparing more sentences…";
           this.showCurrent(true);
         }
         if (this.queue.length === 0) {
+          emptyPolls += 1;
+          if (emptyPolls % 3 === 0 && !this.saving) {
+            // Nothing arriving may mean the track changed in another tab.
+            void this.sync();
+          }
           await sleep(2000);
         } else {
           break;
@@ -784,6 +1000,7 @@ class Practice {
   private showCurrent(autoplay: boolean): void {
     const item = this.current;
     this.modeStatus.textContent = "";
+    this.trackStatus.textContent = "";
     this.plays = 0;
     this.revealed = false;
     this.stopPlayback("answered");
@@ -937,21 +1154,29 @@ class Practice {
     const url = this.audioUrls.get(item.sentenceId);
     this.audioUrls.delete(item.sentenceId);
 
+    if (item.track === "curriculum") {
+      // Curriculum answers are evidence of understanding: keep them until
+      // the server has them, across reloads and lost connections.
+      responses.enqueue(item.sentenceId, payload);
+    }
+
     this.showCurrent(true);
     this.preload();
     void this.fill();
     void outbox.flush();
 
-    void api.respond(item.sentenceId, payload).then(
-      () => undefined,
-      (error: unknown) => {
-        // Answers are fire-and-forget; surface failures without blocking practice.
-        console.error("Failed to record response", error);
-        if (this.isMounted()) {
-          this.hint.textContent = "Couldn't save the last answer.";
-        }
-      },
-    );
+    if (item.track !== "curriculum") {
+      void api.respond(item.sentenceId, payload).then(
+        () => undefined,
+        (error: unknown) => {
+          // Answers are fire-and-forget; surface failures without blocking practice.
+          console.error("Failed to record response", error);
+          if (this.isMounted()) {
+            this.hint.textContent = "Couldn't save the last answer.";
+          }
+        },
+      );
+    }
     // Revoke after the element has moved on to another source.
     void url?.then(
       (u) => setTimeout(() => URL.revokeObjectURL(u), 1000),

@@ -1,6 +1,6 @@
 # Crosstalk Practice
 
-A personal listening-comprehension trainer for a learner of Finnish. It turns the recording of a crosstalk session into an endless stream of new, spoken Finnish sentences drawn from what the learner actually heard, to practise between sessions.
+A personal listening-comprehension trainer for a learner of Finnish. It turns the recording of a crosstalk session into an endless stream of new, spoken Finnish sentences, either drawn from what the learner actually heard or teaching the grammar that connects those words, to practise between sessions.
 
 ## Language
 
@@ -83,7 +83,7 @@ One showing of a practice sentence in the browser, from appearing on screen unti
 _Avoid_: Attempt, trial, view
 
 **Presentation log**:
-The append-only record of what happened during a presentation (playbacks, replays, translation reveals, visibility changes, the response), with timings. Kept for studying comprehension; it never steers practice.
+The append-only record of what happened during a presentation (playbacks, replays, translation reveals, visibility changes, the response), with timings. Kept for studying comprehension; it never steers crosstalk practice, but it qualifies curriculum evidence.
 _Avoid_: Analytics, telemetry, history
 
 **Struggle**:
@@ -99,7 +99,7 @@ The endless sequence of practice sentences the learner listens through, with no 
 _Avoid_: Quiz, drill set, lesson
 
 **Practice mode**:
-The learner's choice of which generation constraints new practice sentences must meet: **beginner** (single-clause sentences only) or **intermediate** (no clause restriction). Switching applies after the sentence currently being heard. A mode describes how a sentence was written, not how hard the learner found it.
+The learner's choice of which generation constraints new crosstalk practice sentences must meet: **beginner** (single-clause sentences only) or **intermediate** (no clause restriction). Switching applies after the sentence currently being heard. A mode describes how a sentence was written, not how hard the learner found it. Curriculum sentences have no mode.
 _Avoid_: Difficulty, level (in code), grade
 
 **Generation policy**:
@@ -107,5 +107,80 @@ The versioned set of authoring rules a practice sentence was written under, stor
 _Avoid_: Prompt version, settings
 
 **Start over**:
-Discarding the practice session and everything in it to make way for a new recording.
+Discarding the practice session and everything in it, including all curriculum evidence, to make way for a new recording.
 _Avoid_: Reset (in learner-facing language), delete
+
+**New recording**:
+Discarding the practice session to make way for a new recording while keeping curriculum evidence.
+_Avoid_: Start over (which also deletes progress)
+
+### Curriculum practice
+
+**Practice track**:
+The choice between crosstalk practice grounded in a recording's language and
+curriculum practice guided by a sequence of grammar and function concepts
+(shown to the learner as "Conversation" and "Building blocks"). Switching
+applies after the sentence currently being heard.
+_Avoid_: Practice mode, difficulty
+
+**Curriculum practice**:
+Listening practice that teaches grammar and function concepts using vocabulary,
+register and interests drawn from crosstalk. Its constructions need not have
+occurred in the recording.
+_Avoid_: Grammar exercises, course (in learner-facing language)
+
+**Learning target**:
+A small meaning distinction and the Finnish forms or constructions that express
+it, narrow enough to isolate in listening examples.
+_Avoid_: Function word (when the meaning spans a construction), chapter
+
+**Active set**:
+The few learning targets receiving concurrent focused practice, interleaved for
+variety alongside reviews of earlier targets. Free slots take the earliest
+eligible targets in catalog order.
+_Avoid_: Lesson, batch
+
+**Background grammar**:
+Grammar a curriculum sentence may use without assessing it, once its required
+learning targets are established. Includes form rules a comprehension response
+cannot isolate, such as vowel harmony and verb types.
+_Avoid_: Scaffold, chapter
+
+**Primary target**:
+The learning target a practice sentence deliberately isolates; other constructions
+serve as supporting material rather than independent comprehension observations.
+Supporting material comes from established targets and from other active targets
+the learner has met several times and is not struggling with.
+_Avoid_: Only grammar in the sentence
+
+**Transfer sentence**:
+A fresh example of a learning target with a different combination of familiar
+content, used to estimate whether understanding extends beyond recent examples.
+A target that meets every other promotion gate gets a transfer sentence next
+(a **transfer check**), one outstanding at a time.
+_Avoid_: Test, quiz (in learner-facing language)
+
+**Review sentence**:
+A new sentence revisiting an earlier learning target after intervening practice
+or time, rather than replaying an answered sentence.
+_Avoid_: Repeated card
+
+**Comprehension estimate**:
+An uncertain assessment of the learner's understanding of a learning target,
+informed by responses, listening support, variation and later review.
+_Avoid_: Verified mastery, objective knowledge score
+
+**Curriculum evidence**:
+What one response to a curriculum sentence says about its primary target, given
+how it was listened to: an unaided success, a success after replaying, a success
+only with the translation, a failure, or not a fair listen. Refined as the
+presentation log arrives; kept across new recordings.
+_Avoid_: Score, label, grade
+
+**Established target**:
+A learning target understood well enough, on fresh and varied sentences, to
+unlock the targets that depend on it. Promotion needs, among other gates, two
+transfer sentences understood from the audio alone (no translation), not back
+to back. Reversible after failed reviews. Not stored: recomputed from curriculum
+evidence on every decision.
+_Avoid_: Mastered, learned, completed

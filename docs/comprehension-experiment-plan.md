@@ -12,6 +12,13 @@
 
 ### Implemented: presentation instrumentation
 
+> **Curriculum track.** Curriculum practice (see
+> [curriculum-listening-plan.md](curriculum-listening-plan.md), ADR 0008) is
+> adaptive and uses presentation facts to qualify its evidence. Its sentences
+> (`practice_sentences.track = 'curriculum'`) are not part of this experiment's
+> non-adaptive collection population: exclude or analyse them separately, using
+> their stored plan and catalog versions. Crosstalk behaviour below is unchanged.
+
 - **Presentations:** every time a sentence becomes current, the browser creates
   a presentation with a client-generated UUID. A reload creates a new
   presentation for the same sentence; it never creates another response.

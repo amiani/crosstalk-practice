@@ -1,5 +1,6 @@
 import { Context, Effect, FileSystem, Layer, Queue, Result } from "effect";
 
+import { Curriculum } from "../curriculum/Curriculum.ts";
 import type {
   PracticeMode,
   SessionId,
@@ -19,14 +20,18 @@ const MAX_UNPRODUCTIVE_ROUNDS = 3;
 /**
  * Background work for the active session. Each pass reconciles stored state
  * with what should exist: transcribe an uploaded recording, profile the
- * transcript, then keep a small buffer of voiced, unanswered sentences in the
- * session's current practice mode.
+ * transcript, then keep a small buffer of voiced, unanswered sentences of
+ * the session's current track (and, for crosstalk practice, mode).
+ * Curriculum writing runs in jobs of its own, which a pass only starts, so
+ * a wake-up never waits for earlier writing to finish.
  * Everything is derived from the database, so a restart simply resumes.
  */
 export class PracticeWorker extends Context.Service<
   PracticeWorker,
   {
     readonly runPass: Effect.Effect<void, PracticeStoreError>;
+    /** Runs a pass and waits for the curriculum jobs it started to settle. */
+    readonly settle: Effect.Effect<void, PracticeStoreError>;
     /** Asks for a pass soon, e.g. after an upload or an answer. */
     readonly wake: Effect.Effect<void>;
     /** Waits for a wake-up, or the idle interval as a safety net. */
@@ -41,6 +46,7 @@ export class PracticeWorker extends Context.Service<
       const author = yield* SentenceAuthor;
       const synthesizer = yield* SpeechSynthesizer;
       const settings = yield* PracticeSettings;
+      const curriculum = yield* Curriculum;
       const fs = yield* FileSystem.FileSystem;
       const signal = yield* Queue.sliding<void>(1);
 
@@ -147,7 +153,8 @@ export class PracticeWorker extends Context.Service<
           if (
             current._tag === "None" ||
             current.value.sessionId !== sessionId ||
-            current.value.stage !== "ready"
+            current.value.stage !== "ready" ||
+            current.value.track !== "crosstalk"
           ) {
             return;
           }
@@ -229,6 +236,24 @@ export class PracticeWorker extends Context.Service<
               if (session.profile === null) {
                 return yield* Effect.die("A ready session has no profile");
               }
+              // Late events may have completed evidence; plans left pending
+              // by an interrupted pass are abandoned.
+              yield* curriculum.reconcile(session.sessionId);
+              if (session.track === "curriculum") {
+                return yield* curriculum.replenish(
+                  session.sessionId,
+                  session.profile,
+                  store.current.pipe(
+                    Effect.map(
+                      (current) =>
+                        current._tag === "Some" &&
+                        current.value.sessionId === session.sessionId &&
+                        current.value.stage === "ready" &&
+                        current.value.track === "curriculum",
+                    ),
+                  ),
+                );
+              }
               return yield* replenish(session.sessionId, session.profile);
             case "failed":
               return;
@@ -238,6 +263,7 @@ export class PracticeWorker extends Context.Service<
 
       return PracticeWorker.of({
         runPass: runPass(),
+        settle: runPass().pipe(Effect.andThen(curriculum.idle)),
         waitForWork: Queue.take(signal).pipe(
           Effect.timeoutOption("30 seconds"),
           Effect.asVoid,

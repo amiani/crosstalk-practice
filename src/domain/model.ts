@@ -34,6 +34,19 @@ export const DEFAULT_PRACTICE_MODE: PracticeMode = "beginner";
 /** Clients that do not choose a mode keep the original, unrestricted behaviour. */
 export const UNSPECIFIED_PRACTICE_MODE: PracticeMode = "intermediate";
 
+/**
+ * Which practice the stream serves. Crosstalk practice writes sentences from
+ * the recording's language (in a practice mode); curriculum practice teaches
+ * grammar and function concepts using the recording's vocabulary.
+ */
+export const PracticeTrack = Schema.Literals(["crosstalk", "curriculum"]);
+export type PracticeTrack = typeof PracticeTrack.Type;
+
+/** What the page offers first when starting a new session. */
+export const DEFAULT_PRACTICE_TRACK: PracticeTrack = "curriculum";
+/** Clients that do not choose a track keep the original crosstalk practice. */
+export const UNSPECIFIED_PRACTICE_TRACK: PracticeTrack = "crosstalk";
+
 // ---------------------------------------------------------------------------
 // Transcript: what the speech-to-text step heard, before any interpretation.
 // ---------------------------------------------------------------------------
@@ -140,6 +153,8 @@ const SessionSummary = {
   /** The mode new sentences are generated in. */
   mode: PracticeMode,
   sessionId: SessionId,
+  /** The practice new sentences are served from. */
+  track: PracticeTrack,
 };
 
 export const SessionView = Schema.Union([
@@ -165,18 +180,25 @@ export type SessionView = typeof SessionView.Type;
 // Practice.
 // ---------------------------------------------------------------------------
 
-/** A sentence ready to be heard. The Finnish text is deliberately absent. */
+/**
+ * A sentence ready to be heard. The Finnish text, and for curriculum
+ * sentences what they teach, are deliberately absent.
+ */
 export const PracticeItem = Schema.Struct({
   audioUrl: Schema.String,
   english: Schema.String,
-  /** The mode the sentence was generated in. */
-  mode: PracticeMode,
+  /** The mode a crosstalk sentence was generated in; null for curriculum. */
+  mode: Schema.NullOr(PracticeMode),
   sentenceId: SentenceId,
+  track: PracticeTrack,
 });
 export type PracticeItem = typeof PracticeItem.Type;
 
 export const PracticeModeChange = Schema.Struct({ mode: PracticeMode });
 export type PracticeModeChange = typeof PracticeModeChange.Type;
+
+export const PracticeTrackChange = Schema.Struct({ track: PracticeTrack });
+export type PracticeTrackChange = typeof PracticeTrackChange.Type;
 
 export const PracticeResponse = Schema.Struct({
   /** The presentation the learner responded in; links the interaction log. */
