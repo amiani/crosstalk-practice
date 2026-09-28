@@ -3,8 +3,12 @@ import type { Effect, Option } from "effect";
 
 import type {
   AlreadyAnswered,
+  PracticeMode,
   PracticeResponse,
   PracticeStats,
+  PresentationConflict,
+  PresentationEvent,
+  PresentationId,
   SentenceId,
   SentenceNotFound,
   SessionAlreadyExists,
@@ -27,6 +31,8 @@ export type PreparationStep = "transcribing" | "analyzing";
 export interface SessionRecord {
   readonly sessionId: SessionId;
   readonly fileName: string;
+  /** The mode new sentences are written in; the learner may change it. */
+  readonly mode: PracticeMode;
   readonly stage: SessionStage;
   readonly failedStage: PreparationStep | null;
   readonly failure: SessionFailure | null;
@@ -41,6 +47,7 @@ export interface SessionRecord {
 
 export interface NewSession {
   readonly fileName: string;
+  readonly mode: PracticeMode;
   readonly recordingPath: string;
   readonly recordingMimeType: string;
   readonly recordingSeconds: number;
@@ -49,6 +56,13 @@ export interface NewSession {
 export interface UpcomingSentence {
   readonly sentenceId: SentenceId;
   readonly english: string;
+  readonly mode: PracticeMode;
+}
+
+/** The rules a batch of sentences was written under; stored with each. */
+export interface GenerationPolicy {
+  readonly mode: PracticeMode;
+  readonly version: string;
 }
 
 export interface SentenceAwaitingAudio {
@@ -95,10 +109,23 @@ export class PracticeStore extends Context.Service<
     ) => Stored<void>;
     /** Returns a failed session to the step that failed. */
     readonly resume: (sessionId: SessionId) => Stored<void>;
+    /**
+     * Changes the mode future sentences are written and served in. Existing
+     * sentences, responses and presentations are untouched.
+     */
+    readonly setMode: (
+      sessionId: SessionId,
+      mode: PracticeMode,
+    ) => Stored<void>;
 
+    /** Answer counts, and voiced unanswered sentences of every mode. */
     readonly stats: (sessionId: SessionId) => Stored<PracticeStats>;
-    /** Sentences generated but not yet answered, with or without audio. */
-    readonly unansweredCount: (sessionId: SessionId) => Stored<number>;
+    /** Sentences of a mode generated but not yet answered, with or without audio. */
+    readonly unansweredCount: (
+      sessionId: SessionId,
+      mode: PracticeMode,
+    ) => Stored<number>;
+    /** The latest sentences of every mode, to discourage near-repeats. */
     readonly recentSentences: (
       sessionId: SessionId,
       limit: number,
@@ -110,31 +137,51 @@ export class PracticeStore extends Context.Service<
     ) => Stored<ReadonlyArray<Struggle>>;
     /**
      * Stores drafts, skipping any whose normalized text already exists in
-     * the session. Returns how many were new.
+     * the session in any mode. Returns how many were new.
      */
     readonly insertSentences: (
       sessionId: SessionId,
+      policy: GenerationPolicy,
       drafts: ReadonlyArray<SentenceDraft & { readonly normalized: string }>,
     ) => Stored<number>;
+    /** Sentences of a mode still waiting for audio, oldest first. */
     readonly awaitingAudio: (
       sessionId: SessionId,
+      mode: PracticeMode,
     ) => Stored<ReadonlyArray<SentenceAwaitingAudio>>;
     readonly saveAudio: (
       sentenceId: SentenceId,
       speech: SynthesizedSpeech,
     ) => Stored<void>;
 
-    /** Unanswered sentences with audio, oldest first. */
+    /** Unanswered sentences of a mode with audio, oldest first. */
     readonly upcoming: (
       sessionId: SessionId,
+      mode: PracticeMode,
       limit: number,
     ) => Stored<ReadonlyArray<UpcomingSentence>>;
     readonly audio: (
       sentenceId: SentenceId,
     ) => Stored<Option.Option<SynthesizedSpeech>>;
+    /**
+     * Stores the response and links it to its presentation, claiming the
+     * presentation for this sentence if no event has arrived yet.
+     */
     readonly respond: (
       sentenceId: SentenceId,
       response: PracticeResponse,
-    ) => Stored<void, SentenceNotFound | AlreadyAnswered>;
+    ) => Stored<
+      void,
+      SentenceNotFound | AlreadyAnswered | PresentationConflict
+    >;
+    /**
+     * Appends presentation events. Resent event ids are ignored; a
+     * presentation belongs to the first sentence that used it.
+     */
+    readonly recordPresentationEvents: (
+      sentenceId: SentenceId,
+      presentationId: PresentationId,
+      events: ReadonlyArray<PresentationEvent>,
+    ) => Stored<void, SentenceNotFound | PresentationConflict>;
   }
 >()("crosstalk-practice/practice/PracticeStore") {}

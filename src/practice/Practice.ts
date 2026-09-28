@@ -20,7 +20,11 @@ import {
 import type {
   AlreadyAnswered,
   PracticeItem,
+  PracticeMode,
   PracticeResponse,
+  PresentationConflict,
+  PresentationEvent,
+  PresentationId,
   SentenceId,
   SentenceNotFound,
   SessionView,
@@ -46,10 +50,18 @@ export class Practice extends Context.Service<
     readonly view: Effect.Effect<SessionView, PracticeStoreError>;
     readonly start: (
       upload: UploadedRecording,
+      mode: PracticeMode,
     ) => Effect.Effect<
       SessionView,
       SessionAlreadyExists | RecordingRejected | PracticeStoreError
     >;
+    /**
+     * Selects the mode future sentences are generated and served in. The
+     * sentence the learner is hearing, and all history, stay as they are.
+     */
+    readonly setMode: (
+      mode: PracticeMode,
+    ) => Effect.Effect<SessionView, NoActiveSession | PracticeStoreError>;
     readonly retry: Effect.Effect<
       SessionView,
       NoActiveSession | NotRetryable | PracticeStoreError
@@ -64,7 +76,19 @@ export class Practice extends Context.Service<
       response: PracticeResponse,
     ) => Effect.Effect<
       void,
-      SentenceNotFound | AlreadyAnswered | PracticeStoreError
+      | SentenceNotFound
+      | AlreadyAnswered
+      | PresentationConflict
+      | PracticeStoreError
+    >;
+    /** Appends to a presentation's interaction log; never affects practice. */
+    readonly recordPresentationEvents: (
+      sentenceId: SentenceId,
+      presentationId: PresentationId,
+      events: ReadonlyArray<PresentationEvent>,
+    ) => Effect.Effect<
+      void,
+      SentenceNotFound | PresentationConflict | PracticeStoreError
     >;
     readonly audio: (
       sentenceId: SentenceId,
@@ -88,6 +112,7 @@ export class Practice extends Context.Service<
         const summary = {
           createdAt: session.createdAt,
           fileName: session.fileName,
+          mode: session.mode,
           sessionId: session.sessionId,
         };
         switch (session.stage) {
@@ -144,7 +169,7 @@ export class Practice extends Context.Service<
         new PracticeStoreError({ cause });
 
       const start = Effect.fn("Practice.start")(
-        function* (upload: UploadedRecording) {
+        function* (upload: UploadedRecording, mode: PracticeMode) {
           if (Option.isSome(yield* store.current)) {
             return yield* new SessionAlreadyExists();
           }
@@ -169,6 +194,7 @@ export class Practice extends Context.Service<
           const session = yield* store
             .create({
               fileName: upload.name,
+              mode,
               recordingMimeType: converted.mimeType,
               recordingPath: converted.path,
               recordingSeconds: converted.seconds,
@@ -200,6 +226,20 @@ export class Practice extends Context.Service<
         return yield* view;
       }).pipe(Effect.withSpan("Practice.retry"));
 
+      const setMode = Effect.fn("Practice.setMode")(function* (
+        mode: PracticeMode,
+      ) {
+        const current = yield* store.current;
+        if (Option.isNone(current)) {
+          return yield* new NoActiveSession();
+        }
+        if (current.value.mode !== mode) {
+          yield* store.setMode(current.value.sessionId, mode);
+          yield* worker.wake;
+        }
+        return yield* view;
+      });
+
       const reset = Effect.gen(function* () {
         const removed = yield* store.remove;
         if (Option.isSome(removed) && removed.value.recordingPath !== null) {
@@ -214,11 +254,13 @@ export class Practice extends Context.Service<
         }
         const sentences = yield* store.upcoming(
           current.value.sessionId,
+          current.value.mode,
           UPCOMING_LIMIT,
         );
         return sentences.map((sentence): PracticeItem => ({
           audioUrl: audioPath(sentence.sentenceId),
           english: sentence.english,
+          mode: sentence.mode,
           sentenceId: sentence.sentenceId,
         }));
       }).pipe(Effect.withSpan("Practice.upcoming"));
@@ -233,9 +275,11 @@ export class Practice extends Context.Service<
 
       return Practice.of({
         audio: store.audio,
+        recordPresentationEvents: store.recordPresentationEvents,
         reset,
         respond,
         retry,
+        setMode,
         start,
         upcoming,
         view,

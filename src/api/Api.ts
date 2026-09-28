@@ -12,7 +12,12 @@ import {
   NoActiveSession,
   NotRetryable,
   PracticeItem,
+  PracticeMode,
+  PracticeModeChange,
   PracticeResponse,
+  PresentationConflict,
+  PresentationEventBatch,
+  PresentationId,
   RecordingRejected,
   SentenceId,
   SentenceNotFound,
@@ -29,14 +34,23 @@ export class SessionApi extends HttpApiGroup.make("session")
   .add(
     HttpApiEndpoint.get("current", "/", { success: SessionView }),
     /**
-     * Multipart form with a single `recording` file field. Browsers should
-     * post a `FormData` directly; the generated client cannot send files.
+     * Multipart form with a `recording` file field and an optional `mode`
+     * field ("beginner" or "intermediate"; intermediate when omitted, as
+     * older clients expect). Browsers should post a `FormData` directly; the
+     * generated client cannot send files.
      */
     HttpApiEndpoint.post("upload", "/", {
       error: [SessionAlreadyExists, RecordingRejected],
       payload: Schema.Struct({
+        mode: Schema.optionalKey(PracticeMode),
         recording: Multipart.SingleFileSchema,
       }).pipe(HttpApiSchema.asMultipart({ maxFileSize: "500 MiB" })),
+      success: SessionView,
+    }),
+    /** Changes the mode of sentences after the current one. Idempotent. */
+    HttpApiEndpoint.put("setMode", "/mode", {
+      error: NoActiveSession,
+      payload: PracticeModeChange,
       success: SessionView,
     }),
     HttpApiEndpoint.post("retry", "/retry", {
@@ -51,17 +65,36 @@ export class SessionApi extends HttpApiGroup.make("session")
 
 export class PracticeApi extends HttpApiGroup.make("practice")
   .add(
-    /** Ready, unanswered sentences in presentation order (at most 3). */
+    /**
+     * Ready, unanswered sentences of the session's current mode, in
+     * presentation order (at most 3).
+     */
     HttpApiEndpoint.get("upcoming", "/upcoming", {
       error: NoActiveSession,
       success: Schema.Array(PracticeItem),
     }),
     HttpApiEndpoint.post("respond", "/sentences/:sentenceId/response", {
-      error: [SentenceNotFound, AlreadyAnswered],
+      error: [SentenceNotFound, AlreadyAnswered, PresentationConflict],
       params: { sentenceId: SentenceId },
       payload: PracticeResponse,
       success: HttpApiSchema.NoContent,
     }),
+    /**
+     * Appends interaction events for one presentation. Idempotent per event
+     * id, and accepted after the response too. The browser posts these with
+     * a keepalive `fetch` (see `presentationEventsPath`) so they survive the
+     * page being closed.
+     */
+    HttpApiEndpoint.post(
+      "recordPresentationEvents",
+      "/sentences/:sentenceId/presentations/:presentationId/events",
+      {
+        error: [SentenceNotFound, PresentationConflict],
+        params: { presentationId: PresentationId, sentenceId: SentenceId },
+        payload: PresentationEventBatch,
+        success: HttpApiSchema.NoContent,
+      },
+    ),
   )
   .prefix("/api/practice") {}
 
@@ -71,3 +104,9 @@ export class Api extends HttpApi.make("crosstalk-practice")
 
 export const audioPath = (sentenceId: string) =>
   `/api/sentences/${sentenceId}/audio`;
+
+export const presentationEventsPath = (
+  sentenceId: string,
+  presentationId: string,
+) =>
+  `/api/practice/sentences/${sentenceId}/presentations/${presentationId}/events`;

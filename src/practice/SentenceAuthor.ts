@@ -2,6 +2,7 @@ import { Context, Schema } from "effect";
 import type { Effect } from "effect";
 
 import type {
+  PracticeMode,
   SentenceId,
   SessionProfile,
   Transcript,
@@ -16,12 +17,25 @@ export interface Struggle {
 
 export interface SentenceBrief {
   readonly profile: SessionProfile;
+  /** Which generation constraints the sentences must meet. */
+  readonly mode: PracticeMode;
   readonly count: number;
   /** Recently generated Finnish, to steer away from near-repeats. */
   readonly recent: ReadonlyArray<string>;
   /** Recent failures that should inspire simpler variations. */
   readonly struggles: ReadonlyArray<Struggle>;
 }
+
+/**
+ * Identifies the authoring rules each mode is written under, and is stored
+ * with every sentence. Bump a mode's version whenever its writer or review
+ * instructions change meaningfully, so experiments can tell policies apart.
+ * Sentences from before modes existed carry "legacy-v0".
+ */
+export const generationPolicies: Readonly<Record<PracticeMode, string>> = {
+  beginner: "beginner-single-clause-v1",
+  intermediate: "intermediate-v1",
+};
 
 export interface SentenceDraft {
   readonly finnish: string;

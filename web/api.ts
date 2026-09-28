@@ -1,15 +1,21 @@
-/* eslint-disable effecttsgo/async-function, effecttsgo/extends-native-error, effecttsgo/new-promise -- The browser client is deliberately plain DOM and promise code; Effect is used only for the shared API schema and generated client. */
-import { Effect, ManagedRuntime } from "effect";
+/* eslint-disable effecttsgo/async-function, effecttsgo/extends-native-error, effecttsgo/global-fetch, effecttsgo/new-promise -- The browser client is deliberately plain DOM and promise code; Effect is used only for the shared API schema and generated client. */
+import { Effect, ManagedRuntime, Predicate, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 
-import { Api } from "../src/api/Api.ts";
+import { Api, presentationEventsPath } from "../src/api/Api.ts";
+import {
+  PRESENTATION_EVENT_SCHEMA_VERSION,
+  PresentationEventBatch,
+} from "../src/domain/model.ts";
 import type {
   PracticeItem,
+  PracticeMode,
   PracticeResponse,
   SentenceId,
   SessionView,
 } from "../src/domain/model.ts";
+import type { SendEvents } from "./presentationLog.ts";
 
 /** Browser-side access to the JSON API through the generated Effect client. */
 
@@ -39,6 +45,10 @@ export const retrySession = async (): Promise<SessionView> =>
 export const resetSession = async (): Promise<void> =>
   call((c) => c.session.reset({})).then(() => undefined);
 
+/** Selects the mode of sentences after the current one. */
+export const setMode = async (mode: PracticeMode): Promise<SessionView> =>
+  call((c) => c.session.setMode({ payload: { mode } }));
+
 export const upcoming = async (): Promise<ReadonlyArray<PracticeItem>> =>
   call((c) => c.practice.upcoming({}));
 
@@ -49,6 +59,52 @@ export const respond = async (
   call((c) => c.practice.respond({ params: { sentenceId }, payload })).then(
     () => undefined,
   );
+
+const encodeBatch = Schema.encodeSync(PresentationEventBatch);
+
+/**
+ * Posts presentation events with a plain `fetch` rather than the generated
+ * client: `keepalive` lets the request outlive the page, and the status code
+ * alone decides whether a batch is worth retrying.
+ */
+export const sendPresentationEvents: SendEvents = async (
+  sentenceId,
+  presentationId,
+  events,
+  { keepalive },
+) => {
+  let response: Response;
+  try {
+    response = await fetch(presentationEventsPath(sentenceId, presentationId), {
+      body: JSON.stringify(
+        encodeBatch({
+          events,
+          schemaVersion: PRESENTATION_EVENT_SCHEMA_VERSION,
+        }),
+      ),
+      headers: { "content-type": "application/json" },
+      keepalive,
+      method: "POST",
+    });
+  } catch {
+    return "retry";
+  }
+  if (response.ok) {
+    return "accepted";
+  }
+  if (response.status === 404) {
+    // A deleted sentence is final; any other 404 is most likely a server
+    // that predates this endpoint, so keep the events until it is updated.
+    const body: unknown = await response.json().catch(() => undefined);
+    const gone = Predicate.isObject(body) && body._tag === "SentenceNotFound";
+    return gone ? "rejected" : "retry";
+  }
+  const transient =
+    response.status === 408 ||
+    response.status === 429 ||
+    response.status >= 500;
+  return transient ? "retry" : "rejected";
+};
 
 /**
  * A rejected upload, with the HTTP status (409 when a session already exists,
@@ -69,10 +125,12 @@ export class UploadError extends Error {
  */
 export const uploadRecording = async (
   file: File,
+  mode: PracticeMode,
   onProgress: (fraction: number) => void,
 ): Promise<void> =>
   new Promise((resolve, reject) => {
     const form = new FormData();
+    form.append("mode", mode);
     form.append("recording", file, file.name);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/session");

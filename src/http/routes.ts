@@ -3,7 +3,7 @@ import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { Api } from "../api/Api.ts";
-import { SentenceId } from "../domain/model.ts";
+import { SentenceId, UNSPECIFIED_PRACTICE_MODE } from "../domain/model.ts";
 import { Practice } from "../practice/Practice.ts";
 
 /**
@@ -30,7 +30,14 @@ const sessionHandlers = HttpApiBuilder.group(
       current: () => orDieOnStore(practice.view),
       reset: () => orDieOnStore(practice.reset),
       retry: () => orDieOnStore(practice.retry),
-      upload: ({ payload }) => orDieOnStore(practice.start(payload.recording)),
+      setMode: ({ payload }) => orDieOnStore(practice.setMode(payload.mode)),
+      upload: ({ payload }) =>
+        orDieOnStore(
+          practice.start(
+            payload.recording,
+            payload.mode ?? UNSPECIFIED_PRACTICE_MODE,
+          ),
+        ),
     });
   }),
 );
@@ -41,6 +48,14 @@ const practiceHandlers = HttpApiBuilder.group(
   Effect.fn(function* (handlers) {
     const practice = yield* Practice;
     return handlers.handleAll({
+      recordPresentationEvents: ({ params, payload }) =>
+        orDieOnStore(
+          practice.recordPresentationEvents(
+            params.sentenceId,
+            params.presentationId,
+            payload.events,
+          ),
+        ),
       respond: ({ params, payload }) =>
         orDieOnStore(practice.respond(params.sentenceId, payload)),
       upcoming: () => orDieOnStore(practice.upcoming),

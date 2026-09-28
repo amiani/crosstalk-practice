@@ -78,6 +78,14 @@ _Avoid_: Answer, hint, solution
 The learner's single judgement of a practice sentence: understood or didn't understand.
 _Avoid_: Answer, grade, score
 
+**Presentation**:
+One showing of a practice sentence in the browser, from appearing on screen until the learner responds or leaves. Reloading shows the sentence again as a new presentation; a response belongs to exactly one.
+_Avoid_: Attempt, trial, view
+
+**Presentation log**:
+The append-only record of what happened during a presentation (playbacks, replays, translation reveals, visibility changes, the response), with timings. Kept for studying comprehension; it never steers practice.
+_Avoid_: Analytics, telemetry, history
+
 **Struggle**:
 A practice sentence the learner recently responded to as not understood.
 _Avoid_: Mistake, failure, wrong answer
@@ -89,6 +97,14 @@ _Avoid_: Retry, repeat, rephrasing
 **Practice stream**:
 The endless sequence of practice sentences the learner listens through, with no batches, end or score.
 _Avoid_: Quiz, drill set, lesson
+
+**Practice mode**:
+The learner's choice of which generation constraints new practice sentences must meet: **beginner** (single-clause sentences only) or **intermediate** (no clause restriction). Switching applies after the sentence currently being heard. A mode describes how a sentence was written, not how hard the learner found it.
+_Avoid_: Difficulty, level (in code), grade
+
+**Generation policy**:
+The versioned set of authoring rules a practice sentence was written under, stored with it alongside its practice mode, so later analysis can tell sentences written under different rules apart.
+_Avoid_: Prompt version, settings
 
 **Start over**:
 Discarding the practice session and everything in it to make way for a new recording.

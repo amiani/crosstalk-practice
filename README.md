@@ -47,10 +47,11 @@ The PostgreSQL suite is skipped without `CROSSTALK_TEST_DATABASE_URL` and
 
 ## How it works
 
-1. **Upload** (`POST /api/session`, multipart `recording`): the file is probed
-   (≤ `MAX_RECORDING_MINUTES`, default 30), converted to mono MP3 under
-   `DATA_DIR/recordings`, and a session row is created in stage
-   `transcribing`.
+1. **Upload** (`POST /api/session`, multipart `recording` plus optional
+   `mode`): the file is probed (≤ `MAX_RECORDING_MINUTES`, default 30),
+   converted to mono MP3 under `DATA_DIR/recordings`, and a session row is
+   created in stage `transcribing` with the chosen **practice mode**. The page
+   offers Beginner by default; API clients that omit `mode` get Intermediate.
 2. **Background worker** (`PracticeWorker`) reconciles the stored session on
    every wake-up (upload, retry, answer) and at least every 30 s, so restarts
    resume where they left off:
@@ -68,22 +69,42 @@ The PostgreSQL suite is skipped without `CROSSTALK_TEST_DATABASE_URL` and
      snippets are dropped. Fewer than `MIN_USABLE_UTTERANCES` fails the
      session as `insufficient_material` rather than padding with unrelated
      material.
-   - `ready` → keep `PRACTICE_BUFFER_SIZE` unanswered sentences ahead of you.
+   - `ready` → keep `PRACTICE_BUFFER_SIZE` unanswered sentences of the
+     session's current mode ahead of you.
      `SentenceAuthor.writeSentences` writes a batch from the profile, recent
      sentences (to discourage near-repeats) and recent struggles (failures in
      the last 10 answers). A second LLM pass reviews each sentence
      (grammar, naturalness, translation, standalone sense) and questionable
-     ones are discarded. Exact duplicates (ignoring case, punctuation and
+     ones are discarded. In **Beginner** mode the writer must produce
+     single-clause sentences (variations included) and the reviewer also
+     rejects any sentence that is not a single clause; **Intermediate** has no
+     clause restriction. Exact duplicates (ignoring case, punctuation and
      spacing) are rejected by a unique index. `SpeechSynthesizer` (`google/gemini-3.8-flash-tts` via
      OpenRouter, raw PCM wrapped as WAV) voices each sentence; audio is
      stored in PostgreSQL.
 3. **Practice**: `GET /api/practice/upcoming` returns the next voiced
-   sentences (English translation and audio URL only; the Finnish text never
-   reaches the browser). `POST /api/practice/sentences/:id/response` records
-   `understood`, `translationRevealed` and `replayCount` and wakes the worker.
+   sentences of the current mode (English translation, mode and audio URL
+   only; the Finnish text never reaches the browser).
+   `PUT /api/session/mode` (`{"mode": "beginner" | "intermediate"}`) switches
+   modes: the sentence on screen stays, later ones come from the new mode.
+   Unanswered sentences of the other mode are kept for switching back, and
+   work already under way keeps its original mode. Each sentence stores
+   `generation_mode` and `generation_policy` (for example
+   `beginner-single-clause-v1`; sentences from before modes are
+   `intermediate`/`legacy-v0`). `POST /api/practice/sentences/:id/response` records
+   `understood`, `translationRevealed` and `replayCount` for the
+   presentation it was given in, and wakes the worker.
+4. **Presentation log**: while a sentence is on screen the browser records
+   playback requests/starts/ends/interruptions/failures, translation reveals,
+   visibility changes and the response, each with a sequence number and
+   monotonic timing. Events wait in `localStorage` until
+   `POST /api/practice/sentences/:id/presentations/:presentationId/events`
+   accepts them (idempotent per event id; `keepalive` when the page hides).
+   They are stored in `practice_presentations` and
+   `practice_presentation_events` and do not influence generation.
 
 Persisted until reset: the session, its transcript and profile, every
-generated sentence with its audio, and every response.
+generated sentence with its audio, every response, and the presentation log.
 
 ### Code map
 
@@ -102,6 +123,7 @@ generated sentence with its audio, and every response.
 | `src/db/Database.ts`                                     | Client and migrations                                                              |
 | `src/Application.ts`                                     | Layer wiring; swap providers here                                                  |
 | `web/`                                                   | Vanilla TS mobile page                                                             |
+| `web/presentationLog.ts`                                 | Presentation events: numbering, timing, durable outbox and retrying delivery       |
 
 To change speech vendors, provide different `Transcriber` /
 `SpeechSynthesizer` layers in `src/Application.ts`. To change the LLM, set

@@ -1,13 +1,17 @@
 import { Context, Effect, FileSystem, Layer, Queue, Result } from "effect";
 
-import type { SessionId, SessionProfile } from "../domain/model.ts";
+import type {
+  PracticeMode,
+  SessionId,
+  SessionProfile,
+} from "../domain/model.ts";
 import { SpeechSynthesizer } from "../speech/SpeechSynthesizer.ts";
 import { Transcriber } from "../speech/Transcriber.ts";
 import { normalizeSentence } from "./normalize.ts";
 import { PracticeSettings } from "./PracticeSettings.ts";
 import { PracticeStore } from "./PracticeStore.ts";
 import type { PracticeStoreError, SessionRecord } from "./PracticeStore.ts";
-import { SentenceAuthor } from "./SentenceAuthor.ts";
+import { generationPolicies, SentenceAuthor } from "./SentenceAuthor.ts";
 
 /** Consecutive generation rounds that add nothing before a pass gives up. */
 const MAX_UNPRODUCTIVE_ROUNDS = 3;
@@ -15,7 +19,8 @@ const MAX_UNPRODUCTIVE_ROUNDS = 3;
 /**
  * Background work for the active session. Each pass reconciles stored state
  * with what should exist: transcribe an uploaded recording, profile the
- * transcript, then keep a small buffer of voiced, unanswered sentences.
+ * transcript, then keep a small buffer of voiced, unanswered sentences in the
+ * session's current practice mode.
  * Everything is derived from the database, so a restart simply resumes.
  */
 export class PracticeWorker extends Context.Service<
@@ -109,8 +114,9 @@ export class PracticeWorker extends Context.Service<
 
       const voicePending = Effect.fn("PracticeWorker.voicePending")(function* (
         sessionId: SessionId,
+        mode: PracticeMode,
       ) {
-        const pending = yield* store.awaitingAudio(sessionId);
+        const pending = yield* store.awaitingAudio(sessionId, mode);
         yield* Effect.forEach(
           pending,
           (sentence) =>
@@ -131,10 +137,27 @@ export class PracticeWorker extends Context.Service<
         sessionId: SessionId,
         profile: SessionProfile,
       ) {
-        yield* voicePending(sessionId);
         let unproductive = 0;
+        let lastMode: PracticeMode | undefined;
         while (unproductive < MAX_UNPRODUCTIVE_ROUNDS) {
-          const unanswered = yield* store.unansweredCount(sessionId);
+          // The learner may switch modes at any time, so every round works
+          // for whichever mode is selected now. Work already under way for
+          // the previous mode keeps that mode's label and waits in its buffer.
+          const current = yield* store.current;
+          if (
+            current._tag === "None" ||
+            current.value.sessionId !== sessionId ||
+            current.value.stage !== "ready"
+          ) {
+            return;
+          }
+          const mode = current.value.mode;
+          if (mode !== lastMode) {
+            unproductive = 0;
+            lastMode = mode;
+          }
+          yield* voicePending(sessionId, mode);
+          const unanswered = yield* store.unansweredCount(sessionId, mode);
           if (unanswered >= settings.bufferSize) {
             return;
           }
@@ -149,6 +172,7 @@ export class PracticeWorker extends Context.Service<
           const drafts = yield* author
             .writeSentences({
               count: settings.batchSize,
+              mode,
               profile,
               recent,
               struggles: struggles.slice(0, settings.maxStruggles),
@@ -163,6 +187,7 @@ export class PracticeWorker extends Context.Service<
           }
           const inserted = yield* store.insertSentences(
             sessionId,
+            { mode, version: generationPolicies[mode] },
             drafts.success
               .map((draft) => ({
                 ...draft,
@@ -174,11 +199,11 @@ export class PracticeWorker extends Context.Service<
             Effect.annotateLogs({
               accepted: drafts.success.length,
               inserted,
+              mode,
               struggles: struggles.length,
             }),
           );
           unproductive = inserted === 0 ? unproductive + 1 : 0;
-          yield* voicePending(sessionId);
         }
         yield* Effect.logWarning(
           "Generation produced no new sentences; will try again later",

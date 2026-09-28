@@ -4,7 +4,7 @@ export default defineConfig({
   test: {
     // PostgreSQL suites share one test database.
     fileParallelism: false,
-    include: ["src/**/*.test.ts", "tools/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "tools/**/*.test.ts", "web/**/*.test.ts"],
     root: ".",
   },
 });

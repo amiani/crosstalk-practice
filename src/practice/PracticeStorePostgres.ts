@@ -3,6 +3,9 @@ import { Effect, Layer, Option, Schema } from "effect";
 
 import {
   AlreadyAnswered,
+  PracticeMode,
+  PRESENTATION_EVENT_SCHEMA_VERSION,
+  PresentationConflict,
   SentenceId,
   SentenceNotFound,
   SessionAlreadyExists,
@@ -12,14 +15,21 @@ import {
   Transcript,
 } from "../domain/model.ts";
 import type {
+  PracticeMode as PracticeModeType,
   PracticeResponse,
+  PresentationEvent,
+  PresentationId,
   SessionFailure as SessionFailureType,
   SessionProfile as SessionProfileType,
   Transcript as TranscriptType,
 } from "../domain/model.ts";
 import type { SynthesizedSpeech } from "../speech/SpeechSynthesizer.ts";
 import { PracticeStore, PracticeStoreError } from "./PracticeStore.ts";
-import type { NewSession, PreparationStep } from "./PracticeStore.ts";
+import type {
+  GenerationPolicy,
+  NewSession,
+  PreparationStep,
+} from "./PracticeStore.ts";
 import type { SentenceDraft } from "./SentenceAuthor.ts";
 
 const SessionRow = Schema.Struct({
@@ -27,6 +37,7 @@ const SessionRow = Schema.Struct({
   failedStage: Schema.NullOr(Schema.Literals(["transcribing", "analyzing"])),
   failure: Schema.NullOr(SessionFailure),
   fileName: Schema.String,
+  mode: PracticeMode,
   profile: Schema.NullOr(SessionProfile),
   recordingMimeType: Schema.String,
   recordingPath: Schema.NullOr(Schema.String),
@@ -42,10 +53,12 @@ const decodeCounts = Schema.decodeUnknownEffect(
     Schema.Struct({
       answered: Schema.Int,
       buffered: Schema.Int,
-      unanswered: Schema.Int,
       understood: Schema.Int,
     }),
   ),
+);
+const decodeUnanswered = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ unanswered: Schema.Int })),
 );
 const decodeFinnish = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ finnish: Schema.String })),
@@ -66,7 +79,11 @@ const decodeAwaiting = Schema.decodeUnknownEffect(
 );
 const decodeUpcoming = Schema.decodeUnknownEffect(
   Schema.Array(
-    Schema.Struct({ english: Schema.String, sentenceId: SentenceId }),
+    Schema.Struct({
+      english: Schema.String,
+      mode: PracticeMode,
+      sentenceId: SentenceId,
+    }),
   ),
 );
 const decodeAudio = Schema.decodeUnknownEffect(
@@ -76,6 +93,12 @@ const decodeAudio = Schema.decodeUnknownEffect(
 );
 const decodeAnswered = Schema.decodeUnknownEffect(
   Schema.Array(Schema.Struct({ answered: Schema.Boolean })),
+);
+const decodeOwner = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ sentenceId: SentenceId })),
+);
+const decodeEventIds = Schema.decodeUnknownEffect(
+  Schema.Array(Schema.Struct({ eventId: Schema.String })),
 );
 
 const storeError = (cause: unknown) => new PracticeStoreError({ cause });
@@ -93,6 +116,7 @@ export const practiceStorePostgres = Layer.effect(
       SELECT
         session_id,
         file_name,
+        mode,
         stage,
         failed_stage,
         failure,
@@ -112,6 +136,7 @@ export const practiceStorePostgres = Layer.effect(
           INSERT INTO
             practice_sessions ${sql.insert({
               fileName: session.fileName,
+              mode: session.mode,
               recordingMimeType: session.recordingMimeType,
               recordingPath: session.recordingPath,
               recordingSeconds: session.recordingSeconds,
@@ -121,6 +146,7 @@ export const practiceStorePostgres = Layer.effect(
           RETURNING
             session_id,
             file_name,
+            mode,
             stage,
             failed_stage,
             failure,
@@ -155,6 +181,7 @@ export const practiceStorePostgres = Layer.effect(
       RETURNING
         session_id,
         file_name,
+        mode,
         stage,
         failed_stage,
         failure,
@@ -238,8 +265,24 @@ export const practiceStorePostgres = Layer.effect(
       `;
     }, Effect.mapError(storeError));
 
-    const counts = (sessionId: SessionId) =>
-      sql`
+    const setMode = Effect.fn("PracticeStore.setMode")(function* (
+      sessionId: SessionId,
+      mode: PracticeModeType,
+    ) {
+      yield* sql`
+        UPDATE practice_sessions
+        SET
+          mode = ${mode},
+          updated_at = clock_timestamp()
+        WHERE
+          session_id = ${sessionId}
+      `;
+    }, Effect.mapError(storeError));
+
+    const stats = Effect.fn("PracticeStore.stats")(function* (
+      sessionId: SessionId,
+    ) {
+      const rows = yield* sql`
         SELECT
           count(r.sentence_id)::int AS answered,
           count(r.sentence_id) FILTER (
@@ -250,41 +293,32 @@ export const practiceStorePostgres = Layer.effect(
             WHERE
               r.sentence_id IS NULL
               AND s.audio IS NOT NULL
-          )::int AS buffered,
-          count(*) FILTER (
-            WHERE
-              r.sentence_id IS NULL
-          )::int AS unanswered
+          )::int AS buffered
         FROM
           practice_sentences s
           LEFT JOIN practice_responses r ON r.sentence_id = s.sentence_id
         WHERE
           s.session_id = ${sessionId}
-      `.pipe(
-        Effect.flatMap(decodeCounts),
-        Effect.map(
-          (rows) =>
-            rows[0] ?? {
-              answered: 0,
-              buffered: 0,
-              unanswered: 0,
-              understood: 0,
-            },
-        ),
-        Effect.mapError(storeError),
-      );
-
-    const stats = Effect.fn("PracticeStore.stats")(function* (
-      sessionId: SessionId,
-    ) {
-      const { answered, buffered, understood } = yield* counts(sessionId);
-      return { answered, buffered, understood };
-    });
+      `.pipe(Effect.flatMap(decodeCounts));
+      return rows[0] ?? { answered: 0, buffered: 0, understood: 0 };
+    }, Effect.mapError(storeError));
 
     const unansweredCount = Effect.fn("PracticeStore.unansweredCount")(
-      function* (sessionId: SessionId) {
-        return (yield* counts(sessionId)).unanswered;
+      function* (sessionId: SessionId, mode: PracticeModeType) {
+        const rows = yield* sql`
+          SELECT
+            count(*)::int AS unanswered
+          FROM
+            practice_sentences s
+            LEFT JOIN practice_responses r ON r.sentence_id = s.sentence_id
+          WHERE
+            s.session_id = ${sessionId}
+            AND s.generation_mode = ${mode}
+            AND r.sentence_id IS NULL
+        `.pipe(Effect.flatMap(decodeUnanswered));
+        return rows[0]?.unanswered ?? 0;
       },
+      Effect.mapError(storeError),
     );
 
     const recentSentences = Effect.fn("PracticeStore.recentSentences")(
@@ -343,6 +377,7 @@ export const practiceStorePostgres = Layer.effect(
     const insertSentences = Effect.fn("PracticeStore.insertSentences")(
       function* (
         sessionId: SessionId,
+        policy: GenerationPolicy,
         drafts: ReadonlyArray<SentenceDraft & { readonly normalized: string }>,
       ) {
         if (drafts.length === 0) {
@@ -351,13 +386,23 @@ export const practiceStorePostgres = Layer.effect(
         // Joining on the session keeps a reset session from gaining rows.
         const rows = yield* sql`
           INSERT INTO
-            practice_sentences (session_id, finnish, english, normalized, variation_of)
+            practice_sentences (
+              session_id,
+              finnish,
+              english,
+              normalized,
+              variation_of,
+              generation_mode,
+              generation_policy
+            )
           SELECT
             s.session_id,
             d.finnish,
             d.english,
             d.normalized,
-            d.variation_of::uuid
+            d.variation_of::uuid,
+            ${policy.mode},
+            ${policy.version}
           FROM
             jsonb_to_recordset(${sql.json(
               drafts.map((draft) => ({
@@ -379,6 +424,7 @@ export const practiceStorePostgres = Layer.effect(
 
     const awaitingAudio = Effect.fn("PracticeStore.awaitingAudio")(function* (
       sessionId: SessionId,
+      mode: PracticeModeType,
     ) {
       return yield* sql`
         SELECT
@@ -388,6 +434,7 @@ export const practiceStorePostgres = Layer.effect(
           practice_sentences
         WHERE
           session_id = ${sessionId}
+          AND generation_mode = ${mode}
           AND audio IS NULL
         ORDER BY
           position
@@ -410,17 +457,20 @@ export const practiceStorePostgres = Layer.effect(
 
     const upcoming = Effect.fn("PracticeStore.upcoming")(function* (
       sessionId: SessionId,
+      mode: PracticeModeType,
       limit: number,
     ) {
       return yield* sql`
         SELECT
           s.sentence_id,
-          s.english
+          s.english,
+          s.generation_mode AS mode
         FROM
           practice_sentences s
           LEFT JOIN practice_responses r ON r.sentence_id = s.sentence_id
         WHERE
           s.session_id = ${sessionId}
+          AND s.generation_mode = ${mode}
           AND s.audio IS NOT NULL
           AND r.sentence_id IS NULL
         ORDER BY
@@ -451,6 +501,45 @@ export const practiceStorePostgres = Layer.effect(
       );
     }, Effect.mapError(storeError));
 
+    /**
+     * Makes `presentationId` a presentation of `sentenceId` unless it already
+     * is one. Fails if the sentence is gone or the id belongs to another.
+     */
+    const claimPresentation = Effect.fn("PracticeStore.claimPresentation")(
+      function* (sentenceId: SentenceId, presentationId: PresentationId) {
+        yield* sql`
+          INSERT INTO
+            practice_presentations (presentation_id, sentence_id)
+          SELECT
+            ${presentationId},
+            sentence_id
+          FROM
+            practice_sentences
+          WHERE
+            sentence_id = ${sentenceId}
+          ON CONFLICT (presentation_id) DO NOTHING
+        `;
+        const owners = yield* sql`
+          SELECT
+            sentence_id
+          FROM
+            practice_presentations
+          WHERE
+            presentation_id = ${presentationId}
+        `.pipe(Effect.flatMap(decodeOwner));
+        const owner = owners[0];
+        if (owner === undefined) {
+          return yield* new SentenceNotFound({ sentenceId });
+        }
+        if (owner.sentenceId !== sentenceId) {
+          return yield* new PresentationConflict({
+            message: "The presentation belongs to another sentence.",
+            presentationId,
+          });
+        }
+      },
+    );
+
     const respond = Effect.fn("PracticeStore.respond")(
       function* (sentenceId: SentenceId, response: PracticeResponse) {
         const found = yield* sql`
@@ -469,9 +558,11 @@ export const practiceStorePostgres = Layer.effect(
         if (sentence.answered) {
           return yield* new AlreadyAnswered({ sentenceId });
         }
+        yield* claimPresentation(sentenceId, response.presentationId);
         const inserted = yield* sql`
           INSERT INTO
             practice_responses ${sql.insert({
+              presentationId: response.presentationId,
               replayCount: response.replayCount,
               sentenceId,
               translationRevealed: response.translationRevealed,
@@ -486,6 +577,92 @@ export const practiceStorePostgres = Layer.effect(
           return yield* new AlreadyAnswered({ sentenceId });
         }
       },
+      sql.withTransaction,
+      Effect.catchTags({
+        SchemaError: (cause) => Effect.fail(storeError(cause)),
+        SqlError: (cause) => Effect.fail(storeError(cause)),
+      }),
+    );
+
+    const recordPresentationEvents = Effect.fn(
+      "PracticeStore.recordPresentationEvents",
+    )(
+      function* (
+        sentenceId: SentenceId,
+        presentationId: PresentationId,
+        events: ReadonlyArray<PresentationEvent>,
+      ) {
+        yield* claimPresentation(sentenceId, presentationId);
+        if (events.length === 0) {
+          return;
+        }
+        // Both unique keys (event id, and sequence within the presentation)
+        // are skipped here; the check below tells a retry from a clash.
+        const inserted = yield* sql`
+          INSERT INTO
+            practice_presentation_events (
+              event_id,
+              presentation_id,
+              sequence,
+              event_type,
+              schema_version,
+              client_elapsed_ms,
+              client_time,
+              detail
+            )
+          SELECT
+            e.event_id,
+            ${presentationId},
+            e.sequence,
+            e.event_type,
+            ${PRESENTATION_EVENT_SCHEMA_VERSION},
+            e.client_elapsed_ms,
+            to_timestamp(e.client_epoch_ms / 1000.0),
+            e.detail
+          FROM
+            jsonb_to_recordset(${sql.json(
+              events.map((event) => ({
+                client_elapsed_ms: event.clientElapsedMs,
+                client_epoch_ms: event.clientEpochMs,
+                detail: event.detail,
+                event_id: event.eventId,
+                event_type: event.detail._tag,
+                sequence: event.sequence,
+              })),
+            )}) AS e (
+              event_id uuid,
+              sequence integer,
+              event_type text,
+              client_elapsed_ms double precision,
+              client_epoch_ms double precision,
+              detail jsonb
+            )
+          ON CONFLICT DO NOTHING
+          RETURNING
+            event_id
+        `;
+        const submitted = new Set(events.map((event) => event.eventId));
+        if (inserted.length === submitted.size) {
+          return;
+        }
+        const stored = yield* sql`
+          SELECT
+            event_id::text
+          FROM
+            practice_presentation_events
+          WHERE
+            presentation_id = ${presentationId}
+            AND ${sql.in("event_id", [...submitted])}
+        `.pipe(Effect.flatMap(decodeEventIds));
+        if (stored.length !== submitted.size) {
+          return yield* new PresentationConflict({
+            message:
+              "An event reused a sequence number or id with different content.",
+            presentationId,
+          });
+        }
+      },
+      sql.withTransaction,
       Effect.catchTags({
         SchemaError: (cause) => Effect.fail(storeError(cause)),
         SqlError: (cause) => Effect.fail(storeError(cause)),
@@ -501,12 +678,14 @@ export const practiceStorePostgres = Layer.effect(
       insertSentences,
       recentSentences,
       recentStruggles,
+      recordPresentationEvents,
       remove,
       respond,
       resume,
       saveAudio,
       saveProfile,
       saveTranscript,
+      setMode,
       stats,
       unansweredCount,
       upcoming,

@@ -1,6 +1,15 @@
 /* eslint-disable effecttsgo/async-function, effecttsgo/global-console, effecttsgo/global-fetch, effecttsgo/global-timers, effecttsgo/new-promise -- The browser client is deliberately plain DOM and promise code; Effect is used only for the shared API schema and generated client. */
-import type { PracticeItem, SessionView } from "../src/domain/model.ts";
+import { DEFAULT_PRACTICE_MODE } from "../src/domain/model.ts";
+import type {
+  PracticeItem,
+  PracticeMode,
+  PresentationEventDetail,
+  SessionView,
+} from "../src/domain/model.ts";
 import * as api from "./api.ts";
+import { acceptUpcoming, keepCurrent } from "./practiceQueue.ts";
+import { PresentationOutbox, randomUuid } from "./presentationLog.ts";
+import type { Presentation } from "./presentationLog.ts";
 
 // ---------------------------------------------------------------------------
 // Tiny DOM helpers.
@@ -44,6 +53,124 @@ const show = (...children: ReadonlyArray<Child>): number => {
 };
 
 const sleep = async (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// Practice mode selector.
+// ---------------------------------------------------------------------------
+
+const modeOptions: ReadonlyArray<{
+  readonly mode: PracticeMode;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    description: "Simple sentences with a single clause.",
+    label: "Beginner",
+    mode: "beginner",
+  },
+  {
+    description: "Any sentence structure, including longer sentences.",
+    label: "Intermediate",
+    mode: "intermediate",
+  },
+];
+
+let modeControls = 0;
+
+/** A labelled radio group; native radios keep it keyboard accessible. */
+class ModeControl {
+  public readonly element: HTMLFieldSetElement;
+  private readonly inputs = new Map<PracticeMode, HTMLInputElement>();
+
+  public constructor(
+    initial: PracticeMode,
+    onChange: (mode: PracticeMode) => void,
+    status?: HTMLElement,
+  ) {
+    modeControls += 1;
+    const name = `practice-mode-${modeControls}`;
+    this.element = h(
+      "fieldset",
+      { class: "mode" },
+      h("legend", {}, "Sentence level"),
+      ...modeOptions.map((option) => {
+        const input = h("input", {
+          checked: option.mode === initial,
+          name,
+          type: "radio",
+          value: option.mode,
+        });
+        input.addEventListener("change", () => {
+          if (input.checked) {
+            onChange(option.mode);
+          }
+        });
+        this.inputs.set(option.mode, input);
+        return h(
+          "label",
+          { class: "mode-option" },
+          input,
+          h(
+            "span",
+            {},
+            h("strong", {}, option.label),
+            h("span", { class: "mode-description" }, option.description),
+          ),
+        );
+      }),
+      status,
+    );
+  }
+
+  public get value(): PracticeMode {
+    for (const [mode, input] of this.inputs) {
+      if (input.checked) {
+        return mode;
+      }
+    }
+    return DEFAULT_PRACTICE_MODE;
+  }
+
+  public set value(mode: PracticeMode) {
+    const input = this.inputs.get(mode);
+    if (input !== undefined) {
+      input.checked = true;
+    }
+  }
+
+  public set disabled(disabled: boolean) {
+    this.element.disabled = disabled;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Presentation log: how each sentence was listened to, for later analysis.
+// ---------------------------------------------------------------------------
+
+const outbox = new PresentationOutbox({
+  send: api.sendPresentationEvents,
+  storage: (() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return undefined;
+    }
+  })(),
+});
+// Deliver whatever an earlier visit could not.
+void outbox.flush();
+
+document.addEventListener("visibilitychange", () => {
+  const visible = document.visibilityState === "visible";
+  practice?.visibilityChanged(visible);
+  if (!visible) {
+    outbox.flushOnExit();
+  } else {
+    // The mode may have been changed in another tab meanwhile.
+    void practice?.sync();
+  }
+});
+window.addEventListener("pagehide", () => outbox.flushOnExit());
 
 const knownErrors: Record<string, string> = {
   NoActiveSession: "There is no active session.",
@@ -162,6 +289,7 @@ const renderUpload = (): void => {
   );
   const status = h("p", { class: "status", role: "status" });
   const progress = h("progress", { hidden: true, max: 1, value: 0 });
+  const mode = new ModeControl(DEFAULT_PRACTICE_MODE, () => {});
 
   input.addEventListener("change", () => {
     const file = input.files?.[0];
@@ -178,13 +306,14 @@ const renderUpload = (): void => {
     }
     button.disabled = true;
     input.disabled = true;
+    mode.disabled = true;
     pick.classList.add("disabled");
     progress.hidden = false;
     progress.removeAttribute("value");
     status.classList.remove("error");
     status.textContent = "Uploading…";
     try {
-      await api.uploadRecording(file, (fraction) => {
+      await api.uploadRecording(file, mode.value, (fraction) => {
         progress.value = fraction;
         status.textContent =
           fraction >= 1
@@ -205,6 +334,7 @@ const renderUpload = (): void => {
       status.textContent = errorText(error);
       button.disabled = false;
       input.disabled = false;
+      mode.disabled = false;
       pick.classList.remove("disabled");
     }
   };
@@ -222,6 +352,7 @@ const renderUpload = (): void => {
       ),
       input,
       pick,
+      mode.element,
       button,
       progress,
       status,
@@ -307,14 +438,31 @@ const renderFailed = (failure: {
 
 type ReadyView = Extract<SessionView, { readonly _tag: "Ready" }>;
 
+/** A playback attempt, from request until it ends, fails or is cut short. */
+interface Playback {
+  readonly id: string;
+  readonly presentation: Presentation;
+}
+
 class Practice {
   private readonly token: number;
   private readonly audio = new Audio();
   private queue: Array<PracticeItem> = [];
+  /** The mode future sentences come from, as last confirmed by the server. */
+  private mode: PracticeMode;
+  private savingMode = false;
+  /**
+   * Bumped when the mode changes, so `upcoming` responses requested before
+   * the change are discarded rather than queued.
+   */
+  private queueGeneration = 0;
   /** Sentences answered locally, so a stale `upcoming` never shows them again. */
   private readonly answered = new Set<string>();
   /** Object URLs of prefetched audio, keyed by sentence id. */
   private readonly audioUrls = new Map<string, Promise<string>>();
+  /** The current sentence's presentation, which every event is logged to. */
+  private presentation: Presentation | undefined;
+  private playback: Playback | undefined;
   private plays = 0;
   private revealed = false;
   private fetching = false;
@@ -348,10 +496,21 @@ class Practice {
     h("p", {}, "Preparing more sentences…"),
   );
   private readonly about = h("details", { class: "about" });
+  private readonly modeStatus = h("p", {
+    class: "mode-status",
+    role: "status",
+  });
+  private readonly modeControl: ModeControl;
 
   public constructor(view: ReadyView) {
     this.answeredCount = view.stats.answered;
     this.understoodCount = view.stats.understood;
+    this.mode = view.mode;
+    this.modeControl = new ModeControl(
+      view.mode,
+      (mode) => void this.changeMode(mode),
+      this.modeStatus,
+    );
     this.audio.preload = "auto";
 
     this.playButton.addEventListener("click", () => void this.play());
@@ -359,6 +518,7 @@ class Practice {
       this.revealed = true;
       this.translation.hidden = false;
       this.revealButton.hidden = true;
+      this.presentation?.record({ _tag: "TranslationRevealed" });
     });
     this.understoodButton.addEventListener("click", () => this.answer(true));
     this.notUnderstoodButton.addEventListener("click", () =>
@@ -372,6 +532,32 @@ class Practice {
         this.playButton.classList.remove("playing"),
       );
     }
+    this.audio.addEventListener("ended", () =>
+      this.finishPlayback((playbackId) => ({
+        _tag: "PlaybackEnded",
+        playbackId,
+        positionMs: this.positionMs(),
+      })),
+    );
+    this.audio.addEventListener("pause", () => {
+      // Reaching the end also pauses, and the app's own pauses are logged
+      // where they happen (and may already have been followed by a new play).
+      if (this.audio.ended || !this.audio.paused) {
+        return;
+      }
+      this.finishPlayback((playbackId) => ({
+        _tag: "PlaybackPaused",
+        playbackId,
+        positionMs: this.positionMs(),
+      }));
+    });
+    this.audio.addEventListener("error", () =>
+      this.finishPlayback((playbackId) => ({
+        _tag: "PlaybackFailed",
+        playbackId,
+        reason: `media error ${this.audio.error?.code ?? "unknown"}`,
+      })),
+    );
 
     this.stage.append(
       this.playButton,
@@ -398,6 +584,7 @@ class Practice {
         ),
       ),
       h("section", { class: "practice" }, this.stage, this.waiting),
+      this.modeControl.element,
       this.about,
     );
     this.updateSession(view);
@@ -411,6 +598,7 @@ class Practice {
   }
 
   public dispose(): void {
+    this.stopPlayback("left");
     this.audio.pause();
     this.audio.removeAttribute("src");
     for (const url of this.audioUrls.values()) {
@@ -419,7 +607,16 @@ class Practice {
     this.audioUrls.clear();
   }
 
+  public visibilityChanged(visible: boolean): void {
+    if (this.isMounted()) {
+      this.presentation?.record({ _tag: "VisibilityChanged", visible });
+    }
+  }
+
   public updateSession(view: ReadyView): void {
+    if (!this.savingMode) {
+      this.applyMode(view.mode);
+    }
     // Server stats may lag behind in-flight responses; never go backwards.
     this.answeredCount = Math.max(this.answeredCount, view.stats.answered);
     this.understoodCount = Math.max(
@@ -439,6 +636,74 @@ class Practice {
     );
   }
 
+  /** Picks up changes made elsewhere (another tab); errors are ignored. */
+  public async sync(): Promise<void> {
+    if (!this.isMounted()) {
+      return;
+    }
+    try {
+      const view = await api.currentSession();
+      if (this.isMounted()) {
+        render(view);
+      }
+    } catch {
+      // Practice carries on; the next sync or fetch will try again.
+    }
+  }
+
+  private async changeMode(mode: PracticeMode): Promise<void> {
+    if (this.savingMode || mode === this.mode) {
+      return;
+    }
+    this.savingMode = true;
+    this.modeControl.disabled = true;
+    this.modeStatus.classList.remove("error");
+    this.modeStatus.textContent = "Saving…";
+    try {
+      const view = await api.setMode(mode);
+      if (!this.isMounted()) {
+        return;
+      }
+      this.savingMode = false;
+      this.modeStatus.textContent = "";
+      render(view);
+    } catch (error) {
+      if (!this.isMounted()) {
+        return;
+      }
+      this.modeControl.value = this.mode;
+      this.modeStatus.classList.add("error");
+      this.modeStatus.textContent = `Couldn't change the level: ${errorText(error)}`;
+    } finally {
+      this.savingMode = false;
+      this.modeControl.disabled = false;
+    }
+  }
+
+  /**
+   * Switches future sentences to `mode`. The sentence on screen stays, with
+   * its playback, translation and presentation; prefetched ones are dropped.
+   */
+  private applyMode(mode: PracticeMode): void {
+    if (mode === this.mode) {
+      return;
+    }
+    this.mode = mode;
+    this.modeControl.value = mode;
+    this.queueGeneration += 1;
+    const { kept, dropped } = keepCurrent(this.queue);
+    this.queue = kept;
+    for (const item of dropped) {
+      const url = this.audioUrls.get(item.sentenceId);
+      this.audioUrls.delete(item.sentenceId);
+      void url?.then(URL.revokeObjectURL, () => {});
+    }
+    this.modeStatus.classList.remove("error");
+    this.modeStatus.textContent =
+      this.current === undefined ? "" : "Applies after this sentence.";
+    void this.fill();
+  }
+
   private renderStats(): void {
     this.stats.textContent = `${this.answeredCount} answered · ${this.understoodCount} understood`;
   }
@@ -455,6 +720,7 @@ class Practice {
     this.fetching = true;
     try {
       while (this.isMounted() && this.queue.length < 2) {
+        const generation = this.queueGeneration;
         let items: ReadonlyArray<PracticeItem>;
         try {
           items = await api.upcoming();
@@ -468,16 +734,20 @@ class Practice {
         if (!this.isMounted()) {
           return;
         }
-        const known = new Set(this.queue.map((i) => i.sentenceId as string));
-        const wasEmpty = this.queue.length === 0;
-        for (const item of items) {
-          if (
-            !known.has(item.sentenceId) &&
-            !this.answered.has(item.sentenceId)
-          ) {
-            this.queue.push(item);
-          }
+        if (generation !== this.queueGeneration) {
+          // Asked before the mode changed; ask again.
+          continue;
         }
+        const { accepted, otherMode } = acceptUpcoming(this.queue, items, {
+          answered: this.answered,
+          mode: this.mode,
+        });
+        if (otherMode && !this.savingMode) {
+          // The server is in another mode, most likely changed elsewhere.
+          void this.sync();
+        }
+        const wasEmpty = this.queue.length === 0;
+        this.queue.push(...accepted);
         this.preload();
         if (wasEmpty && this.queue.length > 0) {
           this.showCurrent(true);
@@ -513,14 +783,23 @@ class Practice {
 
   private showCurrent(autoplay: boolean): void {
     const item = this.current;
+    this.modeStatus.textContent = "";
     this.plays = 0;
     this.revealed = false;
+    this.stopPlayback("answered");
     this.audio.pause();
     this.stage.hidden = item === undefined;
     this.waiting.hidden = item !== undefined;
     if (item === undefined) {
+      this.presentation = undefined;
       return;
     }
+    this.presentation = outbox.begin(item.sentenceId);
+    this.presentation.record({
+      _tag: "Presented",
+      autoplay,
+      visible: document.visibilityState === "visible",
+    });
     this.playButton.textContent = "▶ Play";
     this.playButton.setAttribute("aria-label", "Play sentence");
     this.translation.textContent = item.english;
@@ -534,9 +813,19 @@ class Practice {
 
   private async play(auto = false): Promise<void> {
     const item = this.current;
-    if (item === undefined) {
+    const presentation = this.presentation;
+    if (item === undefined || presentation === undefined) {
       return;
     }
+    this.stopPlayback("replay", false);
+    const playback: Playback = { id: randomUuid(), presentation };
+    presentation.record({
+      _tag: "PlayRequested",
+      playbackId: playback.id,
+      priorStarts: this.plays,
+      trigger: auto ? "auto" : "tap",
+    });
+    this.playback = playback;
     let src = item.audioUrl;
     const cached = this.audioUrls.get(item.sentenceId);
     if (cached !== undefined) {
@@ -556,6 +845,13 @@ class Practice {
     try {
       await this.audio.play();
     } catch (error) {
+      if (this.playback === playback) {
+        this.finishPlayback((playbackId) => ({
+          _tag: "PlaybackFailed",
+          playbackId,
+          reason: error instanceof DOMException ? error.name : "unknown",
+        }));
+      }
       if (this.current !== item) {
         return;
       }
@@ -570,18 +866,62 @@ class Practice {
     if (this.current !== item) {
       return;
     }
+    if (this.playback === playback) {
+      const duration = this.audio.duration * 1000;
+      presentation.record({
+        _tag: "PlaybackStarted",
+        audioDurationMs: Number.isFinite(duration) ? duration : null,
+        playbackId: playback.id,
+      });
+    }
     this.plays += 1;
     this.hint.textContent = "";
     this.playButton.textContent = "↻ Replay";
     this.playButton.setAttribute("aria-label", "Replay sentence");
   }
 
-  private answer(understood: boolean): void {
-    const item = this.current;
-    if (item === undefined) {
+  private positionMs(): number {
+    const position = this.audio.currentTime * 1000;
+    return Number.isFinite(position) && position > 0 ? position : 0;
+  }
+
+  /** Logs how the current playback ended and forgets it. */
+  private finishPlayback(
+    detail: (playbackId: string) => PresentationEventDetail,
+  ): void {
+    const playback = this.playback;
+    if (playback === undefined) {
       return;
     }
+    this.playback = undefined;
+    playback.presentation.record(detail(playback.id));
+  }
+
+  /** Cuts the current playback short, if any; pauses the audio unless told not to. */
+  private stopPlayback(
+    reason: "replay" | "answered" | "left",
+    pause = true,
+  ): void {
+    this.finishPlayback((playbackId) => ({
+      _tag: "PlaybackInterrupted",
+      playbackId,
+      positionMs: this.positionMs(),
+      reason,
+    }));
+    if (pause) {
+      this.audio.pause();
+    }
+  }
+
+  private answer(understood: boolean): void {
+    const item = this.current;
+    const presentation = this.presentation;
+    if (item === undefined || presentation === undefined) {
+      return;
+    }
+    presentation.record({ _tag: "Responded", understood });
     const payload = {
+      presentationId: presentation.id,
       replayCount: Math.max(0, this.plays - 1),
       translationRevealed: this.revealed,
       understood,
@@ -600,6 +940,7 @@ class Practice {
     this.showCurrent(true);
     this.preload();
     void this.fill();
+    void outbox.flush();
 
     void api.respond(item.sentenceId, payload).then(
       () => undefined,
