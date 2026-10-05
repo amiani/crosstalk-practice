@@ -9,6 +9,7 @@ import {
 
 import {
   AlreadyAnswered,
+  CurriculumProgress,
   NoActiveSession,
   NotRetryable,
   PracticeItem,
@@ -133,6 +134,16 @@ export class CurriculumApi extends HttpApiGroup.make("curriculum")
     HttpApiEndpoint.get("upcoming", "/upcoming", {
       error: NoActiveSession,
       success: Schema.Array(PracticeItem),
+    }),
+    /**
+     * How much of each curriculum's grammar the learner understands, from
+     * all curriculum evidence; needs no session, as progress outlives
+     * recordings. With `since` (epoch milliseconds, e.g. the learner's
+     * midnight) each entry also says how it stood from earlier responses.
+     */
+    HttpApiEndpoint.get("progress", "/progress", {
+      query: { since: Schema.optionalKey(Schema.Finite) },
+      success: Schema.Array(CurriculumProgress),
     }),
     /**
      * Records the response to a curriculum sentence. Resending an identical

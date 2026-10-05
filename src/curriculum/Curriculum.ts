@@ -11,6 +11,7 @@ import {
 
 import { audioPath } from "../api/Api.ts";
 import type {
+  CurriculumProgress,
   PracticeItem,
   SessionId,
   SessionProfile,
@@ -29,6 +30,7 @@ import {
 } from "./CurriculumAuthor.ts";
 import type { CurriculumBrief, RejectedDraft } from "./CurriculumAuthor.ts";
 import {
+  curriculumProgress,
   estimateTargets,
   modelPolicyV1,
   selectNext,
@@ -144,6 +146,14 @@ export class Curriculum extends Context.Service<
       sessionId: SessionId,
       limit: number,
     ) => Effect.Effect<ReadonlyArray<PracticeItem>, PracticeStoreError>;
+    /**
+     * How much of the catalog the learner understands, from all curriculum
+     * evidence (whatever the recording), and optionally as it stood from
+     * responses before `since` (epoch milliseconds).
+     */
+    readonly progress: (
+      since: number | undefined,
+    ) => Effect.Effect<CurriculumProgress, PracticeStoreError>;
     readonly catalog: Catalog;
   }
 >()("crosstalk-practice/curriculum/Curriculum") {
@@ -655,9 +665,38 @@ export class Curriculum extends Context.Service<
             }));
         });
 
+        const progress = Effect.fn("Curriculum.progress")(function* (
+          since: number | undefined,
+        ) {
+          const { estimates, now, observations } = yield* currentEstimates;
+          const before =
+            since === undefined
+              ? null
+              : curriculumProgress(
+                  catalog,
+                  estimateTargets(
+                    catalog,
+                    observations.filter(
+                      (observation) => observation.respondedAt < since,
+                    ),
+                    now,
+                  ),
+                ).understood;
+          const current = curriculumProgress(catalog, estimates);
+          return {
+            curriculumId: catalog.version,
+            established: current.established,
+            targets: current.targets,
+            title: catalog.title,
+            understood: current.understood,
+            understoodBefore: before,
+          };
+        });
+
         return Curriculum.of({
           catalog,
           idle: FiberSet.awaitEmpty(jobs),
+          progress,
           reconcile,
           replenish,
           upcoming,

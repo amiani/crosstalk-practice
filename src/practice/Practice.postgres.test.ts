@@ -17,6 +17,7 @@ import {
 import { HttpRouter } from "effect/unstable/http";
 
 import { RecordingConverter } from "../audio/RecordingConverter.ts";
+import { pilotCatalog } from "../curriculum/catalog/pilot.ts";
 import { Curriculum } from "../curriculum/Curriculum.ts";
 import { CurriculumAuthor } from "../curriculum/CurriculumAuthor.ts";
 import type { CurriculumBrief } from "../curriculum/CurriculumAuthor.ts";
@@ -1659,6 +1660,31 @@ describe.skipIf(url === undefined)(
           });
 
         yield* send("/api/session", { method: "DELETE" });
+        // Progress needs no session: it outlives recordings.
+        const progress = yield* send("/api/curriculum/progress?since=0");
+        assert.strictEqual(progress.status, 200);
+        assert.deepStrictEqual(yield* json(progress), [
+          {
+            curriculumId: pilotCatalog.version,
+            established: 0,
+            targets: pilotCatalog.targets.length,
+            title: pilotCatalog.title,
+            understood: 0,
+            understoodBefore: 0,
+          },
+        ]);
+        const withoutSince = yield* json(
+          yield* send("/api/curriculum/progress"),
+        );
+        assert.deepStrictEqual(
+          (withoutSince as ReadonlyArray<{ understoodBefore: unknown }>)[0]
+            ?.understoodBefore,
+          null,
+        );
+        assert.strictEqual(
+          (yield* send("/api/curriculum/progress?since=soon")).status,
+          400,
+        );
         const legacy = yield* upload();
         assert.strictEqual(decodeTrack(yield* json(legacy)).track, "crosstalk");
         const replaced = yield* send("/api/session/recording", {

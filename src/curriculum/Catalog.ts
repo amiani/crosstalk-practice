@@ -76,6 +76,8 @@ export interface Catalog {
   readonly background: ReadonlyArray<BackgroundGrammar>;
   /** In teaching order: earlier eligible targets are introduced first. */
   readonly targets: ReadonlyArray<LearningTarget>;
+  /** The curriculum's name as the learner knows it, e.g. the textbook. */
+  readonly title: string;
   /** Stored with every curriculum sentence; bump on any content change. */
   readonly version: string;
 }

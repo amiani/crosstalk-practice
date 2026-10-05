@@ -7,8 +7,10 @@ import {
   activeTargets,
   availableBackground,
   classifyObservation,
+  curriculumProgress,
   estimateTargets,
   selectNext,
+  targetProgress,
 } from "./CurriculumPolicy.ts";
 import type {
   Observation,
@@ -212,6 +214,68 @@ describe("estimateTargets", () => {
     expect(fresh?.support).toBeLessThan(later?.support ?? 0);
     expect(later?.support).toBeLessThanOrEqual(0.5);
     expect(later?.support).toBeCloseTo(0.5, 2);
+  });
+});
+
+describe("curriculumProgress", () => {
+  it("starts at zero and counts established targets whole", () => {
+    const empty = curriculumProgress(
+      pilotCatalog,
+      estimateTargets(pilotCatalog, [], start),
+    );
+    expect(empty).toEqual({
+      established: 0,
+      targets: pilotCatalog.targets.length,
+      understood: 0,
+    });
+    const two = curriculumProgress(
+      pilotCatalog,
+      withEstablished(["participants-i-you", "possession-have"]),
+    );
+    expect(two.established).toBe(2);
+    expect(two.understood).toBeCloseTo(2 / pilotCatalog.targets.length);
+  });
+
+  it("ticks up with each unaided success, but not with failures or support", () => {
+    const progressAfter = (overrides: ReadonlyArray<Partial<Observation>>) =>
+      targetProgress(
+        estimateTargets(
+          pilotCatalog,
+          overrides.map((override, index) =>
+            observation({
+              contentKey: `content-${index}`,
+              order: index,
+              sentenceId: `s${index}`,
+              ...override,
+            }),
+          ),
+          start,
+        ).get("participants-i-you"),
+      );
+    const one = progressAfter([{}]);
+    const two = progressAfter([{}, {}]);
+    expect(one).toBeGreaterThan(0);
+    expect(two).toBeGreaterThan(one);
+    expect(progressAfter([{}, { understood: false }])).toBe(one);
+    expect(progressAfter([{}, { translationRevealed: true }])).toBe(one);
+  });
+
+  it("keeps the last share of a target for its promotion", () => {
+    const { estimates } = simulate(80, () => ({}));
+    for (const estimate of estimates.values()) {
+      const progress = targetProgress(estimate);
+      if (estimate.status === "established") {
+        expect(progress).toBe(1);
+      } else {
+        expect(progress).toBeLessThan(1);
+      }
+    }
+    const overall = curriculumProgress(pilotCatalog, estimates);
+    expect(overall.established).toBeGreaterThan(0);
+    expect(overall.understood).toBeGreaterThan(
+      overall.established / overall.targets,
+    );
+    expect(overall.understood).toBeLessThanOrEqual(1);
   });
 });
 

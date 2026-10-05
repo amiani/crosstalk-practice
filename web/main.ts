@@ -4,6 +4,7 @@ import {
   DEFAULT_PRACTICE_TRACK,
 } from "../src/domain/model.ts";
 import type {
+  CurriculumProgress,
   PracticeItem,
   PracticeMode,
   PracticeTrack,
@@ -78,8 +79,9 @@ interface ChoiceOption<T extends string> {
 }
 
 /**
- * The learner-facing names of the tracks. They never mention concepts,
- * progress or mastery: what is being taught stays behind the scenes.
+ * The learner-facing names of the tracks. They never mention concepts or
+ * mastery: what is being taught stays behind the scenes, and only the
+ * overall share of each curriculum understood is shown (see `Journey`).
  */
 const trackOptions: ReadonlyArray<ChoiceOption<PracticeTrack>> = [
   {
@@ -545,6 +547,143 @@ const renderFailed = (failure: {
 };
 
 // ---------------------------------------------------------------------------
+// Grammar journey: how much of each curriculum the learner understands.
+// ---------------------------------------------------------------------------
+
+const percent = (share: number): string =>
+  `${(Math.max(0, Math.min(1, share)) * 100).toFixed(1)}%`;
+
+/** Epoch milliseconds of the learner's last local midnight. */
+const startOfToday = (): number => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+};
+
+interface JourneyRow {
+  readonly fill: HTMLElement;
+  readonly bar: HTMLElement;
+  readonly note: HTMLElement;
+  readonly percent: HTMLElement;
+  readonly root: HTMLElement;
+  understood: number;
+}
+
+/**
+ * One progress bar per curriculum, shown in Building blocks. Rows persist
+ * between refreshes so the bar slides and the figure flashes as it ticks up.
+ */
+class Journey {
+  public readonly element = h("section", {
+    ariaLabel: "Grammar progress",
+    class: "journey",
+    hidden: true,
+  });
+  private readonly rows = new Map<string, JourneyRow>();
+  private request = 0;
+  private visible = false;
+
+  public set shown(shown: boolean) {
+    this.visible = shown;
+    this.element.hidden = !shown || this.rows.size === 0;
+    if (shown) {
+      void this.refresh();
+    }
+  }
+
+  /** Fetches the latest estimate; failures keep what is on screen. */
+  public async refresh(): Promise<void> {
+    if (!this.visible) {
+      return;
+    }
+    this.request += 1;
+    const request = this.request;
+    let progress: ReadonlyArray<CurriculumProgress>;
+    try {
+      progress = await api.curriculumProgress(startOfToday());
+    } catch {
+      return;
+    }
+    if (request !== this.request) {
+      return;
+    }
+    this.render(progress);
+  }
+
+  private render(progress: ReadonlyArray<CurriculumProgress>): void {
+    const seen = new Set<string>();
+    for (const curriculum of progress) {
+      seen.add(curriculum.curriculumId);
+      const row =
+        this.rows.get(curriculum.curriculumId) ?? this.addRow(curriculum);
+      const ticked = curriculum.understood > row.understood + 1e-9;
+      row.understood = curriculum.understood;
+      row.percent.textContent = percent(curriculum.understood);
+      row.fill.style.width = percent(curriculum.understood);
+      row.bar.setAttribute(
+        "aria-valuenow",
+        (curriculum.understood * 100).toFixed(1),
+      );
+      const today =
+        curriculum.understoodBefore === null
+          ? 0
+          : (curriculum.understood - curriculum.understoodBefore) * 100;
+      const change =
+        Math.abs(today) >= 0.05
+          ? ` · ${today > 0 ? "+" : "−"}${Math.abs(today).toFixed(1)}% today`
+          : "";
+      row.note.textContent = `${curriculum.established} of ${curriculum.targets} building blocks established${change}`;
+      if (ticked) {
+        row.percent.classList.remove("ticked");
+        // Restart the animation.
+        void row.percent.offsetWidth;
+        row.percent.classList.add("ticked");
+      }
+    }
+    for (const [id, row] of this.rows) {
+      if (!seen.has(id)) {
+        row.root.remove();
+        this.rows.delete(id);
+      }
+    }
+    this.element.hidden = !this.visible || this.rows.size === 0;
+  }
+
+  private addRow(curriculum: CurriculumProgress): JourneyRow {
+    const fill = h("div", { class: "journey-fill" });
+    const bar = h("div", { class: "journey-bar" }, fill);
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    bar.setAttribute("aria-label", `${curriculum.title} grammar understood`);
+    const percentText = h("strong", { class: "journey-percent" });
+    const note = h("p", { class: "journey-note" });
+    const root = h(
+      "div",
+      { class: "journey-row" },
+      h(
+        "div",
+        { class: "journey-head" },
+        h("span", {}, `${curriculum.title} grammar`),
+        percentText,
+      ),
+      bar,
+      note,
+    );
+    this.element.append(root);
+    const row: JourneyRow = {
+      bar,
+      fill,
+      note,
+      percent: percentText,
+      root,
+      understood: curriculum.understood,
+    };
+    this.rows.set(curriculum.curriculumId, row);
+    return row;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Practice.
 // ---------------------------------------------------------------------------
 
@@ -615,6 +754,7 @@ class Practice {
     this.waitingText,
   );
   private readonly about = h("details", { class: "about" });
+  private readonly journey = new Journey();
   private readonly trackStatus = h("p", {
     class: "mode-status",
     role: "status",
@@ -710,6 +850,7 @@ class Practice {
 
     this.token = show(
       h("header", { class: "bar" }, this.stats, sessionActions("link")),
+      this.journey.element,
       h("section", { class: "practice" }, this.stage, this.waiting),
       this.saveStatus,
       this.trackControl.element,
@@ -748,6 +889,8 @@ class Practice {
     if (!this.saving) {
       this.applyStream(view.track, view.mode);
     }
+    // Also picks up progress made elsewhere when the page comes back.
+    this.journey.shown = this.track === "curriculum";
     // Server stats may lag behind in-flight responses; never go backwards.
     this.answeredCount = Math.max(this.answeredCount, view.stats.answered);
     this.understoodCount = Math.max(
@@ -1158,6 +1301,10 @@ class Practice {
       // Curriculum answers are evidence of understanding: keep them until
       // the server has them, across reloads and lost connections.
       responses.enqueue(item.sentenceId, payload);
+      // Progress counts the answer once it and its listening log are stored.
+      void Promise.allSettled([responses.flush(), outbox.flush()]).then(
+        async () => this.isMounted() && this.journey.refresh(),
+      );
     }
 
     this.showCurrent(true);

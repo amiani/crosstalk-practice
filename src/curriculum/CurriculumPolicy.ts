@@ -373,6 +373,85 @@ export const estimateTargets = (
 };
 
 // ---------------------------------------------------------------------------
+// Progress.
+// ---------------------------------------------------------------------------
+
+/**
+ * The most a target that is not established can contribute to progress, so
+ * the last step of a target's share is always its promotion.
+ */
+const UNESTABLISHED_PROGRESS_CAP = 0.9;
+
+/**
+ * How far along a target is, from 0 (never practised) to 1 (established).
+ * Other targets earn partial credit for the counted promotion gates they have
+ * met: independent successes, distinct content and separated transfer
+ * successes, each step weighing the same. Those counts never fall and
+ * nothing here decays with time, so progress only drops when evidence is
+ * reclassified or an established target needs revisiting.
+ */
+export const targetProgress = (
+  estimate: TargetEstimate | undefined,
+  policy: ModelPolicy = modelPolicyV1,
+): number => {
+  if (estimate === undefined) {
+    return 0;
+  }
+  if (estimate.status === "established") {
+    return 1;
+  }
+  const gates = policy.promotion;
+  const steps =
+    gates.minIndependentSuccesses +
+    gates.minDistinctContent +
+    gates.minSeparatedTransferSuccesses;
+  if (steps === 0) {
+    return 0;
+  }
+  const met =
+    Math.min(estimate.independentSuccesses, gates.minIndependentSuccesses) +
+    Math.min(estimate.distinctContent, gates.minDistinctContent) +
+    Math.min(
+      estimate.separatedTransferSuccesses,
+      gates.minSeparatedTransferSuccesses,
+    );
+  return (UNESTABLISHED_PROGRESS_CAP * met) / steps;
+};
+
+export interface Progress {
+  readonly established: number;
+  readonly targets: number;
+  /** Share of the catalog's targets understood, from 0 to 1. */
+  readonly understood: number;
+}
+
+/**
+ * How much of a curriculum the learner understands: the mean of every
+ * target's progress, each target weighing the same. An estimate to show the
+ * learner, never an input to selection.
+ */
+export const curriculumProgress = (
+  catalog: Catalog,
+  estimates: ReadonlyMap<TargetId, TargetEstimate>,
+  policy: ModelPolicy = modelPolicyV1,
+): Progress => {
+  const targets = catalog.targets.length;
+  if (targets === 0) {
+    return { established: 0, targets: 0, understood: 0 };
+  }
+  let total = 0;
+  let established = 0;
+  for (const target of catalog.targets) {
+    const estimate = estimates.get(target.id);
+    total += targetProgress(estimate, policy);
+    if (estimate?.status === "established") {
+      established += 1;
+    }
+  }
+  return { established, targets, understood: total / targets };
+};
+
+// ---------------------------------------------------------------------------
 // Selection.
 // ---------------------------------------------------------------------------
 

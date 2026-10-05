@@ -693,5 +693,6 @@ export const pilotCatalog: Catalog = {
       variationDimensions: ["condition", "result"],
     }),
   ],
+  title: "Suomen mestari 1",
   version: "suomen-mestari-1-older-v1-unreviewed",
 };

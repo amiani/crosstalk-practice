@@ -320,6 +320,78 @@ progress {
   font-variant-numeric: tabular-nums;
 }
 
+.journey {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.journey-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.journey-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.journey-percent {
+  display: inline-block;
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.journey-percent.ticked {
+  animation: journey-tick 1.2s ease-out;
+}
+
+@keyframes journey-tick {
+  0% {
+    color: var(--yes);
+    transform: scale(1.15);
+  }
+  100% {
+    color: inherit;
+    transform: scale(1);
+  }
+}
+
+.journey-bar {
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.journey-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.8s ease-out;
+}
+
+.journey-note {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-fill {
+    transition: none;
+  }
+
+  .journey-percent.ticked {
+    animation: none;
+  }
+}
+
 .practice {
   flex: 1;
   display: flex;

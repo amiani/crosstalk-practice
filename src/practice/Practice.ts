@@ -21,6 +21,7 @@ import {
 } from "../domain/model.ts";
 import type {
   AlreadyAnswered,
+  CurriculumProgress,
   PracticeItem,
   PracticeMode,
   PracticeResponse,
@@ -104,6 +105,13 @@ export class Practice extends Context.Service<
       | PresentationConflict
       | PracticeStoreError
     >;
+    /**
+     * Progress through each curriculum, kept across recordings; `since`
+     * (epoch milliseconds) also asks how it stood before then.
+     */
+    readonly curriculumProgress: (
+      since: number | undefined,
+    ) => Effect.Effect<ReadonlyArray<CurriculumProgress>, PracticeStoreError>;
     /** Records a curriculum response; resending the same one succeeds. */
     readonly curriculumRespond: (
       sentenceId: SentenceId,
@@ -377,8 +385,15 @@ export class Practice extends Context.Service<
         }
       });
 
+      const curriculumProgress = (since: number | undefined) =>
+        curriculum.progress(since).pipe(
+          Effect.map((progress) => [progress]),
+          Effect.withSpan("Practice.curriculumProgress"),
+        );
+
       return Practice.of({
         audio: store.audio,
+        curriculumProgress,
         curriculumRespond,
         curriculumUpcoming,
         recordPresentationEvents,

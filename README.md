@@ -137,6 +137,11 @@ The PostgreSQL suite is skipped without `CROSSTALK_TEST_DATABASE_URL` and
    events arrive. `DELETE /api/session/recording` replaces the recording but
    keeps evidence; `DELETE /api/session` deletes everything.
 
+   `GET /api/curriculum/progress?since=<epoch ms>` returns, per curriculum,
+   the share of its grammar understood (established targets whole, others
+   partly by the promotion gates they meet) and the share from responses
+   before `since`; Building blocks shows it as a bar with "+x% today".
+
    Target status (learning, established, …) is not stored: it is recomputed
    from `curriculum_evidence` on every decision. Each plan snapshots the
    target's estimate at planning time, so the latest status per target is

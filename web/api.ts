@@ -14,6 +14,7 @@ import {
   PresentationEventBatch,
 } from "../src/domain/model.ts";
 import type {
+  CurriculumProgress,
   PracticeItem,
   PracticeMode,
   PracticeTrack,
@@ -71,6 +72,12 @@ export const upcoming = async (): Promise<ReadonlyArray<PracticeItem>> =>
 export const curriculumUpcoming = async (): Promise<
   ReadonlyArray<PracticeItem>
 > => call((c) => c.curriculum.upcoming({}));
+
+/** Progress through each curriculum, and how it stood before `since`. */
+export const curriculumProgress = async (
+  since: number,
+): Promise<ReadonlyArray<CurriculumProgress>> =>
+  call((c) => c.curriculum.progress({ query: { since } }));
 
 /** Records a crosstalk answer; curriculum answers go through the outbox. */
 export const respond = async (

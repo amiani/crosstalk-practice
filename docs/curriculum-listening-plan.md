@@ -92,6 +92,14 @@ Behaviour:
   rows (which snapshot the sentence's Finnish/English and classification).
   **Start over** (`DELETE /api/session`) also deletes all evidence.
 - Speech: each sentence stores `speech_source` (TTS model and voice).
+- Progress: Building blocks shows, per curriculum, the percentage of its grammar
+  understood and today's change (`GET /api/curriculum/progress`,
+  `curriculumProgress` in the policy). Established targets count whole; others
+  earn up to 90% of their share from independent successes, distinct content
+  and separated transfer successes, which never fall, so the figure only drops
+  when evidence is reclassified or a target needs revisiting. This relaxes the
+  "no concept dashboard" contract below to a single overall figure: individual
+  targets are still never shown.
 
 Deliberate simplifications of the design below, to revisit if the pilot needs:
 

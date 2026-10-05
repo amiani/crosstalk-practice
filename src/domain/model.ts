@@ -194,6 +194,24 @@ export const PracticeItem = Schema.Struct({
 });
 export type PracticeItem = typeof PracticeItem.Type;
 
+/**
+ * How much of one curriculum's grammar the learner understands, as
+ * estimated from curriculum evidence: established learning targets count
+ * whole, others partly by how close they are to being established.
+ */
+export const CurriculumProgress = Schema.Struct({
+  /** The catalog version the estimate is for. */
+  curriculumId: Schema.String,
+  established: Schema.Int,
+  targets: Schema.Int,
+  title: Schema.String,
+  /** Share understood, from 0 to 1. */
+  understood: Schema.Finite,
+  /** The same share from responses before `since`, when it was asked for. */
+  understoodBefore: Schema.NullOr(Schema.Finite),
+});
+export type CurriculumProgress = typeof CurriculumProgress.Type;
+
 export const PracticeModeChange = Schema.Struct({ mode: PracticeMode });
 export type PracticeModeChange = typeof PracticeModeChange.Type;
 

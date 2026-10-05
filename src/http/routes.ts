@@ -76,6 +76,8 @@ const curriculumHandlers = HttpApiBuilder.group(
   Effect.fn(function* (handlers) {
     const practice = yield* Practice;
     return handlers.handleAll({
+      progress: ({ query }) =>
+        orDieOnStore(practice.curriculumProgress(query.since)),
       respond: ({ params, payload }) =>
         orDieOnStore(practice.curriculumRespond(params.sentenceId, payload)),
       upcoming: () => orDieOnStore(practice.curriculumUpcoming),

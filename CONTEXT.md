@@ -184,3 +184,11 @@ transfer sentences understood from the audio alone (no translation), not back
 to back. Reversible after failed reviews. Not stored: recomputed from curriculum
 evidence on every decision.
 _Avoid_: Mastered, learned, completed
+
+**Curriculum progress**:
+The share of a curriculum's learning targets the learner understands, shown in
+Building blocks as a percentage with today's change. Established targets count
+whole; others earn up to 90% of their share from the counted promotion gates
+they meet (unaided successes, distinct content, transfer successes). Recomputed
+from curriculum evidence; it never steers selection.
+_Avoid_: Score, grade, mastery
