@@ -120,15 +120,15 @@ The PostgreSQL suite is skipped without `CROSSTALK_TEST_DATABASE_URL` and
    them. For each, the pure policy in
    `src/curriculum/CurriculumPolicy.ts` estimates every learning target from
    curriculum evidence and picks a target and role (teaching, transfer or
-   review) from an active set of up to four. Targets follow the older Suomen
-   mestari 1 progression without chapter boundaries: later eligible targets
+   review) from an active set of up to four. Targets follow a conventional beginner
+   progression without chapter boundaries: later eligible targets
    fill free slots in order, and unassessed background grammar unlocks as
    its targets are established. A target that meets every promotion gate but
    the transfer checks gets a transfer sentence next. The
    plan is stored, `CurriculumAuthor`
    writes and independently reviews the sentence from the catalog
-   (`src/curriculum/catalog/pilot.ts`, 28 targets from the older Suomen
-   mestari 1 progression, currently unreviewed) and the profile's
+   (`src/curriculum/catalog/pilot.ts`, 28 targets in a conventional
+   beginner order, currently unreviewed) and the profile's
    vocabulary, and TTS voices it. `GET /api/curriculum/upcoming` serves at most
    four; after running dry the page waits until three are ready (at most 45 s)
    so one wait buys several sentences.

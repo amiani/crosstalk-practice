@@ -196,7 +196,7 @@ describe("LlmCurriculumAuthor", () => {
           call?.user,
           '[standard] form: "minulla / sinulla / name + -lla on + nominative"',
         );
-        assert.include(call?.user, '"Pedrolla on koira." (Pedro has a dog.)');
+        assert.include(call?.user, '"Juholla on koira." (Juho has a dog.)');
         assert.include(call?.user, "negated possession");
         // Supporting targets use the preferred register.
         assert.include(

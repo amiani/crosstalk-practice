@@ -4,29 +4,16 @@ import type {
   Example,
   LearningTarget,
   Realisation,
-  SourceReference,
   TargetId,
 } from "../Catalog.ts";
 
 /**
- * A1 listening targets in the order of the older Suomen mestari 1 edition.
- * The book fixes progression only: targets are not grouped into chapters.
+ * A1 listening targets in a conventional beginner teaching order. Targets
+ * are not grouped into chapters.
  * Form rules that cannot be judged from a comprehension response (vowel
  * harmony, consonant gradation, word and verb types) are background grammar,
  * never targets. Drafted by an agent and not yet checked by a Finnish reviewer.
  */
-
-const guide = (page: number): SourceReference => ({
-  locator: `Teacher's guide p. ${String(page)}`,
-  title: "Suomen mestari 1, Opettajan opas (older edition)",
-  url: "urn:isbn:978-951-792-493-1",
-});
-
-const book = (page: number): SourceReference => ({
-  locator: `Textbook p. ${String(page)}`,
-  title: "Suomen mestari 1 (older edition)",
-  url: "urn:isbn:978-951-792-438-2",
-});
 
 const example = (finnish: string, english: string): Example => ({
   english,
@@ -51,9 +38,8 @@ const background = (
   id: string,
   description: string,
   requires: ReadonlyArray<TargetId>,
-  sources: ReadonlyArray<SourceReference>,
   ...examples: ReadonlyArray<Example>
-): BackgroundGrammar => ({ description, examples, id, requires, sources });
+): BackgroundGrammar => ({ description, examples, id, requires });
 
 export const pilotCatalog: Catalog = {
   background: [
@@ -61,15 +47,13 @@ export const pilotCatalog: Catalog = {
       "background-copula-statements",
       "Affirmative present statements with a noun or name subject and olla; nominative noun, adjective, nationality or profession complements; names and simple numbers",
       [],
-      [guide(8)],
-      example("Pedro on opettaja.", "Pedro is a teacher."),
+      example("Juho on opettaja.", "Juho is a teacher."),
       example("Talo on iso.", "The house is big."),
     ),
     background(
       "background-present-verbs-type-1",
       "Present-tense verbs of type 1 in every person, and puhua with a language in the partitive",
       ["participants-i-you"],
-      [guide(26)],
       example("Anna puhuu hitaasti.", "Anna speaks slowly."),
       example("Anna puhuu suomea.", "Anna speaks Finnish."),
     ),
@@ -77,15 +61,13 @@ export const pilotCatalog: Catalog = {
       "background-partitive-counting-and-verbs",
       "The partitive after numbers and after common verbs that take it (rakastaa, auttaa, etsiä, katsoa, ymmärtää, soittaa an instrument)",
       ["possession-have"],
-      [guide(74), book(71)],
-      example("Pedrolla on kaksi koiraa.", "Pedro has two dogs."),
-      example("Anna rakastaa Pedroa.", "Anna loves Pedro."),
+      example("Juholla on kaksi koiraa.", "Juho has two dogs."),
+      example("Anna rakastaa Juhoa.", "Anna loves Juho."),
     ),
     background(
       "background-present-verbs-all-types",
       "Present-tense verbs of types 1–5 and more verbs taking the partitive, such as pelata, opiskella, juhlia and häiritä",
       ["possession-have", "object-person"],
-      [guide(100), book(92)],
       example("Kalle pelaa jalkapalloa.", "Kalle plays football."),
       example("Anna opiskelee historiaa.", "Anna studies history."),
     ),
@@ -93,8 +75,7 @@ export const pilotCatalog: Catalog = {
       "background-mass-partitive",
       "The partitive of mass nouns, such as food and drink, as the object or as an amount that exists",
       ["existential-there-is", "number-plural"],
-      [guide(190)],
-      example("Pedro juo kahvia.", "Pedro drinks coffee."),
+      example("Juho juo kahvia.", "Juho drinks coffee."),
       example("Kaupassa on maitoa.", "There is milk in the shop."),
     ),
   ],
@@ -117,7 +98,6 @@ export const pilotCatalog: Catalog = {
           example("Sinä olet opettaja.", "You are a teacher."),
         ),
       ],
-      sources: [guide(8), guide(26)],
       variationDimensions: ["person", "complement", "verb"],
     }),
     target({
@@ -138,7 +118,6 @@ export const pilotCatalog: Catalog = {
           example("Talo on iso.", "The house is big."),
         ),
       ],
-      sources: [guide(26)],
       variationDimensions: ["subject", "verb", "affirmative or negative"],
     }),
     target({
@@ -159,7 +138,6 @@ export const pilotCatalog: Catalog = {
           example("Talo on iso.", "The house is big."),
         ),
       ],
-      sources: [guide(26)],
       variationDimensions: ["subject", "verb", "statement or question"],
     }),
     target({
@@ -171,11 +149,10 @@ export const pilotCatalog: Catalog = {
       realisations: [
         standard(
           "kuka / mikä / mitä / missä / milloin at the front",
-          example("Kuka Pedro on?", "Who is Pedro?"),
+          example("Kuka Juho on?", "Who is Juho?"),
           example("Mikä talo on iso?", "Which house is big?"),
         ),
       ],
-      sources: [guide(26), guide(29)],
       variationDimensions: ["question word", "subject"],
     }),
     target({
@@ -188,11 +165,10 @@ export const pilotCatalog: Catalog = {
       realisations: [
         standard(
           "olla kotoisin + -sta / -stä",
-          example("Pedro on kotoisin Brasiliasta.", "Pedro is from Brazil."),
+          example("Juho on kotoisin Oulusta.", "Juho is from Oulu."),
           example("Anna on kotoisin Suomesta.", "Anna is from Finland."),
         ),
       ],
-      sources: [guide(26)],
       variationDimensions: ["person", "country or town"],
     }),
     target({
@@ -213,7 +189,6 @@ export const pilotCatalog: Catalog = {
           example("Minä olen opettaja.", "I am a teacher."),
         ),
       ],
-      sources: [guide(8), guide(26)],
       variationDimensions: ["person", "complement", "verb"],
     }),
     target({
@@ -234,7 +209,6 @@ export const pilotCatalog: Catalog = {
           example("He puhuvat englantia.", "They speak English."),
         ),
       ],
-      sources: [guide(8), guide(26)],
       variationDimensions: ["person", "verb"],
     }),
     target({
@@ -246,16 +220,15 @@ export const pilotCatalog: Catalog = {
       realisations: [
         spoken(
           "mun / sun / name or noun + -n before the thing",
-          example("Pedron auto on iso.", "Pedro's car is big."),
+          example("Juhon auto on iso.", "Juho's car is big."),
           example("Mun auto on pieni.", "My car is small."),
         ),
         standard(
           "minun / sinun / name or noun + -n before the thing",
-          example("Pedron auto on iso.", "Pedro's car is big."),
+          example("Juhon auto on iso.", "Juho's car is big."),
           example("Minun auto on pieni.", "My car is small."),
         ),
       ],
-      sources: [guide(56), guide(6)],
       variationDimensions: ["possessor", "possessed thing"],
     }),
     target({
@@ -268,15 +241,14 @@ export const pilotCatalog: Catalog = {
         spoken(
           "mulla / sulla / name + -lla on + nominative",
           example("Mulla on auto.", "I have a car."),
-          example("Pedrolla on koira.", "Pedro has a dog."),
+          example("Juholla on koira.", "Juho has a dog."),
         ),
         standard(
           "minulla / sinulla / name + -lla on + nominative",
           example("Minulla on auto.", "I have a car."),
-          example("Pedrolla on koira.", "Pedro has a dog."),
+          example("Juholla on koira.", "Juho has a dog."),
         ),
       ],
-      sources: [guide(74), book(72)],
       variationDimensions: ["possessor", "possessed noun"],
     }),
     target({
@@ -297,7 +269,6 @@ export const pilotCatalog: Catalog = {
           example("Minulla on auto.", "I have a car."),
         ),
       ],
-      sources: [guide(74), book(71), book(72)],
       variationDimensions: ["possessor", "possessed noun", "has or doesn't"],
     }),
     target({
@@ -309,16 +280,15 @@ export const pilotCatalog: Catalog = {
       realisations: [
         spoken(
           "mua / sua / häntä / sitä after partitive verbs",
-          example("Pedro auttaa mua.", "Pedro helps me."),
+          example("Juho auttaa mua.", "Juho helps me."),
           example("Mä autan sua.", "I help you."),
         ),
         standard(
           "minua / sinua / häntä after partitive verbs",
-          example("Pedro auttaa minua.", "Pedro helps me."),
+          example("Juho auttaa minua.", "Juho helps me."),
           example("Minä autan sinua.", "I help you."),
         ),
       ],
-      sources: [guide(74), book(71)],
       variationDimensions: ["actor", "person receiving", "verb"],
     }),
     target({
@@ -330,7 +300,7 @@ export const pilotCatalog: Catalog = {
       realisations: [
         spoken(
           "genitive + kanssa",
-          example("Mä asun Pedron kanssa.", "I live with Pedro."),
+          example("Mä asun Juhon kanssa.", "I live with Juho."),
           example(
             "Anna puhuu opettajan kanssa.",
             "Anna talks with the teacher.",
@@ -338,14 +308,13 @@ export const pilotCatalog: Catalog = {
         ),
         standard(
           "genitive + kanssa",
-          example("Minä asun Pedron kanssa.", "I live with Pedro."),
+          example("Minä asun Juhon kanssa.", "I live with Juho."),
           example(
             "Anna puhuu opettajan kanssa.",
             "Anna talks with the teacher.",
           ),
         ),
       ],
-      sources: [guide(74), book(72)],
       variationDimensions: ["companion", "activity"],
     }),
     target({
@@ -361,7 +330,6 @@ export const pilotCatalog: Catalog = {
           example("Koira on autossa.", "The dog is in the car."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "subject"],
     }),
     target({
@@ -377,7 +345,6 @@ export const pilotCatalog: Catalog = {
           example("Kirja on laukussa.", "The book is in the bag."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "subject", "inside or on"],
     }),
     target({
@@ -398,7 +365,6 @@ export const pilotCatalog: Catalog = {
           example("Minä olen kaupassa.", "I am in the shop."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "subject", "movement verb"],
     }),
     target({
@@ -419,7 +385,6 @@ export const pilotCatalog: Catalog = {
           example("Kissa menee pöydälle.", "The cat goes onto the table."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "subject", "movement verb"],
     }),
     target({
@@ -440,7 +405,6 @@ export const pilotCatalog: Catalog = {
           example("Minä menen kauppaan.", "I go into the shop."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "subject", "movement verb"],
     }),
     target({
@@ -461,7 +425,6 @@ export const pilotCatalog: Catalog = {
           example("Kissa tulee pöydältä.", "The cat comes off the table."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "subject", "movement verb"],
     }),
     target({
@@ -478,7 +441,6 @@ export const pilotCatalog: Catalog = {
           example("Sohva on huoneessa.", "The sofa is in the room."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["place", "thing", "existence or location"],
     }),
     target({
@@ -499,7 +461,6 @@ export const pilotCatalog: Catalog = {
           example("Kissa on talossa.", "The cat is in the house."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["noun", "one or several"],
     }),
     target({
@@ -520,7 +481,6 @@ export const pilotCatalog: Catalog = {
           example("Sinä puhut suomea.", "You speak Finnish."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["verb", "command or statement"],
     }),
     target({
@@ -541,7 +501,6 @@ export const pilotCatalog: Catalog = {
           example("Tuo on kissa.", "That is a cat."),
         ),
       ],
-      sources: [guide(130)],
       variationDimensions: ["noun", "adjective", "near or far"],
     }),
     target({
@@ -562,7 +521,6 @@ export const pilotCatalog: Catalog = {
           example("Koira on tuolla.", "The dog is over there."),
         ),
       ],
-      sources: [guide(56), guide(166)],
       variationDimensions: ["subject", "here or there"],
     }),
     target({
@@ -578,7 +536,6 @@ export const pilotCatalog: Catalog = {
           example("Auto on talon edessä.", "The car is in front of the house."),
         ),
       ],
-      sources: [guide(190)],
       variationDimensions: ["reference thing", "position", "subject"],
     }),
     target({
@@ -590,16 +547,15 @@ export const pilotCatalog: Catalog = {
       realisations: [
         spoken(
           "mulle / sulle / person + -lle",
-          example("Mä soitan Pedrolle.", "I call Pedro."),
+          example("Mä soitan Juholle.", "I call Juho."),
           example("Anna puhuu sulle.", "Anna is talking to you."),
         ),
         standard(
           "minulle / sinulle / person + -lle",
-          example("Minä soitan Pedrolle.", "I call Pedro."),
+          example("Minä soitan Juholle.", "I call Juho."),
           example("Anna puhuu sinulle.", "Anna is talking to you."),
         ),
       ],
-      sources: [guide(220)],
       variationDimensions: ["recipient", "verb"],
     }),
     target({
@@ -611,16 +567,15 @@ export const pilotCatalog: Catalog = {
       realisations: [
         spoken(
           "multa / sulta / person + -lta",
-          example("Mä kysyn Pedrolta.", "I ask Pedro."),
+          example("Mä kysyn Juholta.", "I ask Juho."),
           example("Anna kysyy sulta.", "Anna asks you."),
         ),
         standard(
           "minulta / sinulta / person + -lta",
-          example("Minä kysyn Pedrolta.", "I ask Pedro."),
+          example("Minä kysyn Juholta.", "I ask Juho."),
           example("Anna kysyy sinulta.", "Anna asks you."),
         ),
       ],
-      sources: [guide(220)],
       variationDimensions: ["source person", "verb"],
     }),
     target({
@@ -645,7 +600,6 @@ export const pilotCatalog: Catalog = {
           ),
         ),
       ],
-      sources: [guide(220)],
       variationDimensions: ["main statement", "reason"],
     }),
     target({
@@ -667,7 +621,6 @@ export const pilotCatalog: Catalog = {
           ),
         ),
       ],
-      sources: [guide(220)],
       variationDimensions: ["event", "time clause"],
     }),
     target({
@@ -689,10 +642,9 @@ export const pilotCatalog: Catalog = {
           ),
         ),
       ],
-      sources: [guide(220)],
       variationDimensions: ["condition", "result"],
     }),
   ],
-  title: "Suomen mestari 1",
-  version: "suomen-mestari-1-older-v1-unreviewed",
+  title: "Finnish A1",
+  version: "finnish-a1-v2-unreviewed",
 };

@@ -39,9 +39,9 @@ Behaviour:
   versions and the rejected
   drafts with reasons (`rejections`, migration `0005`). A draft's claimed form
   matches a target form ignoring case, spacing and remarks such as "(inessive)".
-- Catalog (`suomen-mestari-1-older-v1-unreviewed`): 28 meaning-bearing
-  listening targets in the older Suomen mestari 1 order. Chapters are not
-  represented: they only fixed the order. Rules that a comprehension response
+- Catalog (`finnish-a1-v2-unreviewed`): 28 meaning-bearing
+  listening targets in a conventional beginner order. Chapters are not
+  represented. Rules that a comprehension response
   cannot isolate (vowel harmony, consonant gradation, word and verb types)
   are never targets. Background grammar is allowed without being assessed,
   once its required targets are established; it replaces the old fixed
@@ -166,27 +166,19 @@ Finnish or a calibrated probability of mastery.
 
 ## 2. Curriculum: coverage versus progression
 
-Build a source-linked A1-oriented coverage map, not an alleged complete inventory
-of Finnish. Extend to A2 only after the initial loop works. Grammar headings are
+Build an A1-oriented coverage map, not an alleged complete inventory of
+Finnish. Extend to A2 only after the initial loop works. Grammar headings are
 coverage categories; teachable targets are small meaning/form contrasts.
 
-Initial primary sources:
+Reference points:
 
-- Suomen mestari 1, older edition, and its teacher's guide
-  (`urn:isbn:978-951-792-438-2`, `urn:isbn:978-951-792-493-1`): the
-  catalog's progression. The teacher's guide's per-chapter grammar lists fix
-  the order; chapters themselves are not modelled.
-- [Suomen mestari 1, revised official contents and samples](https://finnlectura.fi/media/sites/2/suomen-mestari-1-uudistettu-naytesivut-3.pdf):
-  checked against the older edition; not used for the catalog order.
-- [Publisher description](https://finnlectura.fi/oppimateriaalit/suomi-toisena-kielena/suomen-mestari/uudistettu-suomen-mestari-1/):
-  A1 scope and spoken Finnish from the beginning.
 - [University of Helsinki course contents](https://www.helsinki.fi/en/language-centre/teaching-and-research/finnish-foreigners/course-materials-objectives-and-contents):
   independent coverage cross-check.
 - [Official proficiency descriptions](https://www.oph.fi/sites/default/files/documents/169247_proficiency_levels_cefr.pdf):
   communicative outcomes, not a Finnish grammar inventory or teaching order.
 
-Extract the grammar progression, not textbook exercises, phrases or long
-passages: crosstalk provides vocabulary and phrases. Author our own examples.
+Take only a grammar progression, not exercises, phrases or long passages:
+crosstalk provides vocabulary and phrases. Author our own examples.
 Only meaning distinctions that a comprehension response can plausibly reflect
 become targets. Form rules such as vowel harmony, consonant gradation and word
 or verb types are background grammar. Have a competent Finnish teacher review
@@ -196,7 +188,7 @@ target granularity, naturalness, prerequisites and register.
 
 Each entry contains a stable ID and revision, meaning, contrast, permitted Finnish
 realisations by register, required prerequisites,
-exclusions, example/counterexample briefs, variation dimensions, source links,
+exclusions, example/counterexample briefs, variation dimensions
 and linguistic-review status. Define family IDs for structurally similar examples
 before observing responses. A target revision changing its meaning needs an
 explicit evidence migration; do not silently carry its old estimate forward.
@@ -218,7 +210,7 @@ An English word is not the unit: Finnish may use an ending or a construction.
 
 ### Starting grammar and progression
 
-The catalog follows the older Suomen mestari 1 progression, from participants,
+The catalog follows a conventional beginner progression, from participants,
 negation and questions through possession, place and direction, plurality,
 commands, demonstratives, people as recipients or sources, and subordinate
 clauses. It is not a linguistically validated syllabus. Enough early targets
@@ -508,7 +500,7 @@ Gate: simulated histories cannot unlock unsupported targets or deadlock at cold
 start. Finnish review of the targets follows when a reviewer is available; until
 then targets stay `unreviewed` and review changes bump revisions/catalog version.
 Done: `src/curriculum/Catalog.ts`, `src/curriculum/catalog/pilot.ts` (28
-targets from the older Suomen mestari 1 progression, plus background grammar).
+targets in a conventional beginner order, plus background grammar).
 
 ### 2 — Pure learner model and scheduler
 

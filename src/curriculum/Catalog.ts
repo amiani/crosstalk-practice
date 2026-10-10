@@ -1,10 +1,9 @@
 /**
  * The curriculum's coverage of grammar and function concepts: small, versioned
- * learning targets in teaching order, with prerequisites, the Finnish that
- * realises them, and the sources they were drawn from. Background grammar
- * makes sentences possible without being assessed. Trusted, in-repository
- * content: validate it with {@link validateCatalog} in tests rather than at
- * runtime.
+ * learning targets in teaching order, with prerequisites and the Finnish that
+ * realises them. Background grammar makes sentences possible without being
+ * assessed. Trusted, in-repository content: validate it with
+ * {@link validateCatalog} in tests rather than at runtime.
  */
 
 export type TargetId = string;
@@ -23,13 +22,6 @@ export interface Realisation {
   /** The forms or construction, described for authors and reviewers. */
   readonly form: string;
   readonly register: Register;
-}
-
-export interface SourceReference {
-  /** Where in the source the coverage appears, e.g. a chapter. */
-  readonly locator: string;
-  readonly title: string;
-  readonly url: string;
 }
 
 /**
@@ -53,7 +45,6 @@ export interface LearningTarget {
   readonly review: ReviewStatus;
   /** Bump when the meaning or contrast changes; evidence is per revision. */
   readonly revision: number;
-  readonly sources: ReadonlyArray<SourceReference>;
   /** How examples may differ from one another without changing the target. */
   readonly variationDimensions: ReadonlyArray<string>;
 }
@@ -69,14 +60,13 @@ export interface BackgroundGrammar {
   readonly id: string;
   /** Targets that must be established before sentences may use this grammar. */
   readonly requires: ReadonlyArray<TargetId>;
-  readonly sources: ReadonlyArray<SourceReference>;
 }
 
 export interface Catalog {
   readonly background: ReadonlyArray<BackgroundGrammar>;
   /** In teaching order: earlier eligible targets are introduced first. */
   readonly targets: ReadonlyArray<LearningTarget>;
-  /** The curriculum's name as the learner knows it, e.g. the textbook. */
+  /** The curriculum's name as the learner knows it, shown with its progress. */
   readonly title: string;
   /** Stored with every curriculum sentence; bump on any content change. */
   readonly version: string;
@@ -84,7 +74,7 @@ export interface Catalog {
 
 /**
  * Structural problems that would make selection unsound: duplicate IDs,
- * unknown or cyclic prerequisites, content without Finnish or sources, and no
+ * unknown or cyclic prerequisites, content without Finnish, and no
  * starting point.
  */
 export const validateCatalog = (catalog: Catalog): ReadonlyArray<string> => {
@@ -104,9 +94,6 @@ export const validateCatalog = (catalog: Catalog): ReadonlyArray<string> => {
     backgroundIds.add(grammar.id);
     if (grammar.examples.length === 0) {
       issues.push(`${grammar.id} has no examples`);
-    }
-    if (grammar.sources.length === 0) {
-      issues.push(`${grammar.id} has no source`);
     }
     for (const required of grammar.requires) {
       if (!ids.has(required)) {
@@ -130,9 +117,6 @@ export const validateCatalog = (catalog: Catalog): ReadonlyArray<string> => {
           `${target.id} has a ${realisation.register} form without examples`,
         );
       }
-    }
-    if (target.sources.length === 0) {
-      issues.push(`${target.id} has no source`);
     }
     for (const prerequisite of target.prerequisites) {
       if (!ids.has(prerequisite)) {
